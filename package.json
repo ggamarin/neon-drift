@@ -1,0 +1,13 @@
+{
+  "name": "neon-drift-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Демо-прототип дорожной менеджмент-RPG в киберпанк-сеттинге: карта района, пошаговые бои с дистанцией, пиксель-арт 640×360.",
+  "scripts": {
+    "build": "node build.js",
+    "test": "node --test test/sim.test.js",
+    "test:ui": "node build.js && node tools/uirun.js 6",
+    "shots": "node build.js && node tools/shots.js shots"
+  },
+  "engines": { "node": ">=20" }
+}

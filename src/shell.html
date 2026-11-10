@@ -1,0 +1,77 @@
+<title>Neon Drift</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Pixelify+Sans:wght@500;700&display=swap">
+<style>
+  /* Раскладка: одна колонка — экран игры по центру, под ним короткая памятка в две колонки. */
+  :root {
+    --bg: #0b0b14; --panel: #14132a; --line: #2a2456; --fg: #d7dceb; --dim: #8e97ad;
+    --cyan: #2fd6e0; --amber: #f2a81d; --magenta: #e0399f;
+    --display: 'Pixelify Sans', 'Courier New', monospace;
+    --body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 14px; line-height: 1.5;
+    padding-block: 10px 28px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .stage { width: 100%; display: flex; justify-content: center; }
+  #game {
+    display: block; max-width: 100%; background: #000; outline: 1px solid var(--line);
+    image-rendering: pixelated; image-rendering: crisp-edges; touch-action: manipulation; cursor: crosshair;
+  }
+  #game:focus-visible { outline: 2px solid var(--cyan); }
+  #fit {
+    font-family: var(--display); font-size: 14px; letter-spacing: 0.03em; color: var(--fg); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 2px; padding: 4px 12px; margin-top: -8px; cursor: pointer;
+  }
+  #fit:hover { border-color: var(--cyan); color: var(--cyan); }
+  #fit:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  .help { width: 100%; max-width: 860px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 28px; }
+  .help section { min-width: 0; }
+  .help h2 { font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: 0.04em; color: var(--amber); margin: 0 0 6px; text-wrap: balance; }
+  .help ul { margin: 0; padding-left: 18px; color: var(--fg); }
+  .help li { margin-bottom: 4px; }
+  .help li::marker { color: var(--magenta); }
+  .help b { color: var(--cyan); font-weight: 600; }
+  .help kbd { font-family: var(--display); font-size: 13px; color: var(--amber); border: 1px solid var(--line); background: var(--panel); padding: 0 5px; border-radius: 2px; }
+  .note { width: 100%; max-width: 860px; color: var(--dim); font-size: 12.5px; margin: 0; }
+</style>
+
+<div class="wrap">
+  <div class="stage"><canvas id="game" width="640" height="360" tabindex="0" aria-label="Игровой экран Neon Drift"></canvas></div>
+  <button id="fit" type="button" hidden>Масштаб</button>
+
+  <div class="help">
+    <section>
+      <h2>Рейс</h2>
+      <ul>
+        <li>Цель — доехать до <b>КПП</b> на правом краю карты и прорваться через броневик.</li>
+        <li>На карте выбери соседний узел, затем режим езды: он решает, чем платить — зарядом, временем или розыском.</li>
+        <li>Ноль в одном ресурсе — дорогой штраф. Ноль в двух сразу — конец рейса.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>Бой</h2>
+      <ul>
+        <li>У тебя <b>3 ОД</b> на ход. Метка над врагом показывает, что он сделает, когда ты закончишь.</li>
+        <li><b>Дистанция:</b> таран — вплотную, стволы — до средней, взлом — везде.</li>
+        <li>Оттесни врага туда, откуда он не достаёт, и вместо удара он потратит ход на сближение.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>Управление</h2>
+      <ul>
+        <li>Мышь или касание. <kbd>Enter</kbd> — конец хода и «дальше», <kbd>Esc</kbd> — отмена, <kbd>1</kbd>–<kbd>3</kbd> — варианты в событиях.</li>
+        <li>В бою доступен только бардачок: положи туда мелочь заранее через «Багажник».</li>
+      </ul>
+    </section>
+  </div>
+  <p class="note">Прототип для проверки механик: один район, одна ночь. Заезд полностью определяется сидом — его видно на стартовом экране и в финале.</p>
+</div>
+
+<script>
+/*__GAME__*/
+</script>
