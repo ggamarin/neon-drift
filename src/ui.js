@@ -2,12 +2,14 @@
 // Интерфейс: immediate-mode UI поверх canvas 640×360.
 // Экран каждый кадр рисуется заново из состояния модели S; все изменения идут через go(action).
 
-const W = 640, H = 360, SCENE_TOP = 18, PANEL_Y = 248;
+const W = 640, H = 360, SCENE_TOP = 18, PANEL_Y = 248, CAR_X = 24, COL_W = 64;
 let cv = null, c = null, S = null;
 const ui = {
-  mx: -1, my: -1, click: false, cancel: false, input: true, tip: '', t: 0, dt: 16, f: 0, scroll: 0, keys: [],
+  mx: -1, my: -1, click: false, cancel: false, input: true, keysLive: true, tip: '', t: 0, dt: 16, f: 0, scroll: 0, keys: [],
   selNode: null, target: null, trunk: false, sel: null, rot: null, dropAsk: null,
-  floats: [], lockUntil: 0, shakeUntil: 0, flash: null, disp: [], driveT0: 0, muted: false,
+  floats: [], lockUntil: 0, shakeUntil: 0, flash: null, disp: [], muted: false, stretch: null,
+  acc: 0, auto: true, carLane: 1, carPx: 228,           // дорога: накопленное время отрезка, плавная полоса машины
+  coach: null, coachOn: false, hintsOff: false, seen: {},  // обучающие подсказки
 };
 
 // ---------- звук ----------
@@ -32,6 +34,7 @@ function sfx(kind) {
     else if (kind === 'hit') tone(240, 0.12, 'square', 0.06, 70);
     else if (kind === 'hurt') tone(150, 0.2, 'sawtooth', 0.07, 50);
     else if (kind === 'ok') tone(520, 0.08, 'square', 0.04);
+    else if (kind === 'pick') { tone(660, 0.06, 'square', 0.04); tone(990, 0.08, 'square', 0.04, 0, 0.06); }
     else if (kind === 'alarm') { tone(330, 0.1, 'square', 0.04); tone(440, 0.12, 'square', 0.04, 0, 0.11); }
     else if (kind === 'win') { tone(520, 0.12, 'square', 0.05); tone(660, 0.12, 'square', 0.05, 0, 0.12); tone(880, 0.25, 'square', 0.05, 0, 0.24); }
     else if (kind === 'lose') tone(220, 0.5, 'sawtooth', 0.06, 55);
@@ -44,12 +47,15 @@ const rc = (x, y, w, h, i) => R(c, x, y, w, h, i);
 const tx = (s, x, y, i, k) => drawText(c, s, x, y, i, k);
 function txC(s, cx, y, i, k) { tx(s, Math.round(cx - textW(s, k) / 2), y, i, k); }
 function txR(s, rx, y, i) { tx(s, rx - textW(s), y, i); }
+// Подпись на тёмной подложке: читается поверх любого фона.
+function label(s, cx, y, i) { const w = textW(s); rc(Math.round(cx - w / 2) - 2, y - 2, w + 4, 11, 0); txC(s, cx, y, i); }
 function panel(x, y, w, h, fill, border) { rc(x, y, w, h, border == null ? 4 : border); rc(x + 1, y + 1, w - 2, h - 2, fill == null ? 0 : fill); }
 function hover(x, y, w, h) { return ui.input && ui.mx >= x && ui.mx < x + w && ui.my >= y && ui.my < y + h; }
-const key = k => ui.keys.includes(k);
+const key = k => ui.keysLive && ui.keys.includes(k);
+const keyAny = (...ks) => ks.some(key);
 
-// Кнопка. o: off, why (причина недоступности), tip, sub (подпись справа), left, accent, lines (вторая строка).
-function btn(x, y, w, h, label, o) {
+// Кнопка. o: off, why (причина недоступности), tip, sub (подпись справа), left, accent, on, line2, line3.
+function btn(x, y, w, h, text, o) {
   o = o || {};
   const over = hover(x, y, w, h), hot = over && !o.off;
   if (over) ui.tip = o.off ? (o.why || '') : (o.tip || '');
@@ -57,10 +63,11 @@ function btn(x, y, w, h, label, o) {
   const fill = o.off ? 1 : hot ? 9 : o.on ? 9 : o.accent ? 17 : 2;
   const col = o.off ? 5 : hot ? 26 : o.accent ? 20 : 25;
   panel(x, y, w, h, fill, border);
-  const ty = o.line2 ? y + (h >> 1) - 9 : y + ((h - 7) >> 1);
-  if (label) { if (o.left || o.sub) tx(label, x + 6, ty, col); else txC(label, x + w / 2, ty, col); }
+  const ty = o.line2 ? y + 4 : y + ((h - 7) >> 1);
+  if (text) { if (o.left || o.sub || o.line2) tx(text, x + 6, ty, col); else txC(text, x + w / 2, ty, col); }
   if (o.sub) txR(o.sub, x + w - 6, ty, o.off ? 4 : o.subCol || 19);
-  if (o.line2) tx(o.line2, x + 6, y + (h >> 1) + 2, o.off ? 4 : o.line2Col || 24);
+  if (o.line2) tx(o.line2, x + 6, y + 16, o.off ? 4 : o.line2Col || 24);
+  if (o.line3) tx(o.line3, x + 6, y + 27, o.off ? 4 : o.line3Col || 24);
   if (hot && ui.click) { ui.click = false; sfx('click'); return true; }
   return false;
 }
@@ -68,6 +75,41 @@ function btn(x, y, w, h, label, o) {
 function corners(x, y, w, h, i) {
   rc(x, y, 5, 1, i); rc(x, y, 1, 5, i); rc(x + w - 5, y, 5, 1, i); rc(x + w - 1, y, 1, 5, i);
   rc(x, y + h - 1, 5, 1, i); rc(x, y + h - 5, 1, 5, i); rc(x + w - 5, y + h - 1, 5, 1, i); rc(x + w - 1, y + h - 5, 1, 5, i);
+}
+
+// ---------- обучающие подсказки ----------
+
+// Экран во время отрисовки заявляет подсказку; показывается первая ещё не просмотренная.
+// Пока подсказка на экране, остальной ввод отключён, а дорога стоит на паузе.
+function coach(id, text, target, bx, by) {
+  if (ui.hintsOff || ui.seen[id] || ui.coach) return;
+  ui.coach = { id, text, target, bx, by };
+}
+function loadHints() {
+  try { const d = JSON.parse(localStorage.getItem('nd-hints') || '{}'); ui.seen = d.seen || {}; ui.hintsOff = !!d.off; } catch (e) { ui.seen = {}; }
+}
+function saveHints() {
+  try { localStorage.setItem('nd-hints', JSON.stringify({ seen: ui.seen, off: ui.hintsOff })); } catch (e) { /* без хранилища подсказки покажутся снова */ }
+}
+function drawCoach() {
+  const h = ui.coach;
+  ui.coachOn = !!h;
+  if (!h) return;
+  ui.input = true; ui.keysLive = true;
+  const [qx, qy, qw, qh] = h.target, blink = ui.f & 2 ? 20 : 19;
+  corners(qx - 2, qy - 2, qw + 4, qh + 4, blink); corners(qx - 3, qy - 3, qw + 6, qh + 6, blink);
+  const lines = wrapText(h.text, 218), bh = 22 + lines.length * LINE_H + 24;
+  const x = clamp(h.bx, 2, W - 238), y = clamp(h.by, 20, H - bh - 2);
+  rc(x - 2, y - 2, 240, bh + 4, 0);
+  panel(x, y, 236, bh, 1, 19);
+  rc(x, y, 236, 13, 19); tx('ПОДСКАЗКА', x + 6, y + 3, 0);
+  lines.forEach((l, i) => tx(l, x + 9, y + 20 + i * LINE_H, 26));
+  // после закрытия ввод возвращается сразу, со следующего кадра: иначе терялось бы нажатие, сделанное следом
+  if (btn(x + 148, y + bh - 21, 80, 16, 'ПОНЯТНО', { accent: true }) || keyAny('Enter', ' ')) {
+    ui.seen[h.id] = 1; ui.coachOn = false; saveHints();
+    ui.keep = ui.keys.filter(k => k !== 'Enter' && k !== ' ');   // остальные клавиши этого кадра достанутся игре
+  }
+  if (btn(x + 8, y + bh - 21, 104, 16, 'БЕЗ ПОДСКАЗОК')) { ui.hintsOff = true; ui.coachOn = false; saveHints(); }
 }
 
 // ---------- действия ----------
@@ -78,7 +120,7 @@ function go(a) {
   ui.target = null; ui.dropAsk = null;
   if (S.screen !== prev) {
     ui.selNode = null; ui.sel = null; ui.rot = null; ui.trunk = false;
-    if (S.screen === 'drive') ui.driveT0 = ui.t;
+    if (S.screen === 'drive') ui.acc = 0;
     if (S.screen === 'battle') { ui.disp = []; ui.lockUntil = 0; sfx('alarm'); }
     if (S.screen === 'result') sfx(S.over ? (S.over.win ? 'win' : 'lose') : 'ok');
   }
@@ -87,26 +129,29 @@ function go(a) {
 
 function newGame(seed) {
   S = newRun(seed == null ? ((Date.now() % 900000) + 100000) : seed);
-  Object.assign(ui, { selNode: null, target: null, trunk: false, sel: null, rot: null, floats: [], lockUntil: 0, disp: [] });
+  Object.assign(ui, { selNode: null, target: null, trunk: false, sel: null, rot: null, floats: [], lockUntil: 0, disp: [], acc: 0, carLane: 1 });
 }
 
 function takeFx() {
   if (!S.fx.length) return;
-  if (S.screen === 'battle') {
-    let t0 = Math.max(ui.t, ui.lockUntil), hurt = false;
-    for (const e of S.fx) {
-      if (e.k === 'dmg') {
-        const d = ui.disp[e.i];
-        ui.floats.push({ x: d ? d.x + d.w / 2 : 400, y: d ? d.y - d.h - 34 : 150, text: '−' + e.n, col: 26, t0: ui.t });
-        sfx('hit');
-      } else if (e.k === 'hurt') {
-        const col = { hull: 25, charge: 11, focus: 7, credits: 19 }[e.res];
-        ui.floats.push({ x: 72, y: 178, text: RES_NAME[e.res].toUpperCase() + ' −' + e.n, col, t0, hurt: true, from: e.i });
-        t0 += 450; hurt = true;
-      }
+  let t0 = Math.max(ui.t, ui.lockUntil), hurt = false;
+  for (const e of S.fx) {
+    if (e.k === 'road') {
+      const O = ROAD_OBJ[e.kind];
+      const text = RES_NAME[O.res].toUpperCase() + (O.n > 0 ? ' +' : ' −') + Math.abs(O.n);
+      ui.floats.push({ x: CAR_X + 48, y: ui.carPx - 48, text, col: O.bad ? 16 : O.res === 'charge' ? 12 : 20, t0: ui.t });
+      if (O.bad) { sfx('hit'); ui.shakeUntil = ui.t + 160; } else sfx('pick');
+    } else if (S.screen === 'battle' && e.k === 'dmg') {
+      const d = ui.disp[e.i];
+      ui.floats.push({ x: d ? d.x + d.w / 2 : 400, y: d ? d.y - d.h - 36 : 150, text: '−' + e.n, col: 26, t0: ui.t });
+      sfx('hit');
+    } else if (S.screen === 'battle' && e.k === 'hurt') {
+      const col = { hull: 25, charge: 11, focus: 7, credits: 19 }[e.res];
+      ui.floats.push({ x: CAR_X + 48, y: ui.carPx - 48, text: RES_NAME[e.res].toUpperCase() + ' −' + e.n, col, t0, hurt: true, from: e.i });
+      t0 += 450; hurt = true;
     }
-    if (hurt) ui.lockUntil = t0;
   }
+  if (hurt) ui.lockUntil = t0;
   S.fx.length = 0;
 }
 
@@ -116,20 +161,20 @@ function drawFloats() {
     const a = ui.t - fl.t0;
     if (a < 0) continue;
     if (!fl.on) { fl.on = true; if (fl.hurt) { sfx('hurt'); ui.shakeUntil = ui.t + 180; ui.flash = { i: fl.from, until: ui.t + 240 }; } }
-    const x = Math.round(fl.x - textW(fl.text) / 2), y = Math.round(fl.y - a / 45);
-    rc(x - 3, y - 2, textW(fl.text) + 6, 11, 0);
-    tx(fl.text, x, y, fl.col);
+    label(fl.text, clamp(Math.round(fl.x), 40, W - 40), Math.round(fl.y - a / 45), fl.col);
   }
 }
 
 // ---------- общие блоки ----------
 
-function hudBar(x, label, v, max, col) {
-  const low = v <= 3 && label !== 'РОЗЫСК', hot = label === 'РОЗЫСК' && v >= 5;
-  tx(label, x, 5, (low || hot) && (ui.f & 2) ? 30 : 24);
-  x += textW(label) + 4;
+function hudBar(x, name, v, max, col) {
+  const low = v <= 3 && name !== 'РОЗЫСК', hot = name === 'РОЗЫСК' && v >= 5, warn = (low || hot) && (ui.f & 2);
+  tx(name, x, 5, warn ? 30 : 24);
+  x += textW(name) + 4;
   for (let i = 0; i < max; i++) rc(x + i * 4, 5, 3, 7, i < v ? col : 2);
-  return x + max * 4 + 8;
+  x += max * 4 + 2;
+  tx(String(v), x, 5, warn ? 30 : 26);
+  return x + 12 + 7;
 }
 
 function drawHUD() {
@@ -145,11 +190,21 @@ function drawHUD() {
   txR(clockText(S.hour), W - 5, 5, S.hour >= DAWN ? 19 : 25);
 }
 
-// Город в полосе; возвращает y линии дороги для спрайтов.
-function scene(top, h) {
+// Город в полосе; возвращает y средней полосы. quiet — приглушённый фон для дороги и боя.
+function scene(top, h, quiet) {
   const shake = ui.t < ui.shakeUntil ? (Math.floor(ui.t / 45) & 1 ? 2 : -2) : 0;
-  drawScene(c, top, h, ui.scroll + shake);
+  drawScene(c, top, h, ui.scroll + shake, quiet);
   return top + h - SCN_H + LANE_Y;
+}
+
+// Плавное перестроение: ui.carLane догоняет целевую полосу, carY переводит её в пиксели.
+function easeLane(target) {
+  ui.carLane += (target - ui.carLane) * Math.min(1, ui.dt / 70);
+  if (Math.abs(target - ui.carLane) < 0.04) ui.carLane = target;
+}
+function carY(top) {
+  const a = Math.min(1, Math.floor(ui.carLane)), t = ui.carLane - a;
+  return (ui.carPx = Math.round(top + LANES[a] + (LANES[a + 1] - LANES[a]) * t));
 }
 
 function crewCard(x, y, i) {
@@ -197,11 +252,16 @@ function scTitle() {
   if (btn(220, 324, 200, 26, 'НАЧАТЬ РЕЙС', { accent: true }) || key('Enter')) go({ type: 'start' });
   tx('СИД ' + S.seed, 8, 334, 6);
   if (btn(8, 344, 84, 14, 'ДРУГОЙ СИД')) newGame();
+  if (btn(448, 342, 104, 16, ui.hintsOff ? 'ПОДСКАЗКИ: ВЫКЛ' : 'ПОДСКАЗКИ: ВКЛ', { tip: '' })) {
+    ui.hintsOff = !ui.hintsOff;
+    if (!ui.hintsOff) ui.seen = {};   // включили заново — покажем всё с начала
+    saveHints();
+  }
   muteBtn(556, 342);
 }
 
 const NODE_COL = { start: 24, road: 15, meet: 7, hitch: 28, park: 11, shop: 19, gate: 30, hidden: 5 };
-function nodeXY(n) { return [46 + n.col * 50, 74 + n.row * 54]; }
+function nodeXY(n) { return [46 + n.col * 50, 78 + n.row * 56]; }
 
 function scMap() {
   rc(0, 18, W, H - 18, 1);
@@ -218,77 +278,142 @@ function scMap() {
   nodes.forEach(n => {
     const [x, y] = nodeXY(n), type = nodeVisible(S, n) ? n.type : 'hidden';
     const reach = cur.next.includes(n.id), isCur = n.id === S.at, sel = ui.selNode === n.id;
-    const hot = hover(x - 11, y - 11, 22, 22);
+    const hot = hover(x - 14, y - 14, 28, 28);
     let fill = 1, border = 4, ic = NODE_COL[type];
     if (n.seen && !isCur) { fill = 2; border = 3; ic = 5; }
     if (reach) { fill = sel || hot ? 9 : 8; border = sel ? 26 : hot ? 12 : 11; }
     if (isCur) { fill = 4; border = ui.f & 2 ? 26 : 7; ic = 26; }
-    rc(x - 11, y - 11, 22, 22, border); rc(x - 10, y - 10, 20, 20, fill);
-    drawIcon(c, type, x - 4, y - 4, ic);
+    rc(x - 14, y - 14, 28, 28, border); rc(x - 13, y - 13, 26, 26, fill);
+    if (sel) rc(x - 12, y - 12, 24, 24, 26), rc(x - 11, y - 11, 22, 22, fill);
+    drawIcon(c, type, x - 9, y - 8, ic, 2);
+    if (reach) label(NODE_INFO[type].name, x, y + 18, sel ? 26 : 12);
+    if (isCur) label('ВЫ ЗДЕСЬ', x, y + 18, 7);
     if (hot) {
       ui.tip = NODE_INFO[type].name + '. ' + NODE_INFO[type].desc + (reach ? '' : isCur ? ' Вы здесь.' : ' Отсюда не доехать.');
       if (reach && ui.click) { ui.selNode = n.id; ui.click = false; sfx('click'); }
     }
   });
-  let lx = 14;
+  let lx = 12;
   ['road', 'meet', 'hitch', 'park', 'shop', 'gate'].forEach(t => {
-    drawIcon(c, t, lx, 220, NODE_COL[t]);
-    tx(NODE_INFO[t].name, lx + 12, 221, 6);
-    lx += 12 + textW(NODE_INFO[t].name) + 12;
+    drawIcon(c, t, lx, 222, NODE_COL[t]);
+    tx(NODE_INFO[t].name, lx + 12, 223, 6);
+    lx += 12 + textW(NODE_INFO[t].name) + 11;
   });
 
   panel(426, 22, 208, 212, 0, 3);
   if (ui.selNode != null) {
-    const n = nodes[ui.selNode], type = nodeVisible(S, n) ? n.type : 'hidden', I = NODE_INFO[type];
+    const n = nodes[ui.selNode], type = n.type, I = NODE_INFO[type];
     drawIcon(c, type, 434, 30, NODE_COL[type]);
     tx(I.name.toUpperCase(), 448, 30, 19);
-    wrapText(I.desc, 192).forEach((l, i) => tx(l, 434, 44 + i * LINE_H, 25));
-    tx('КАК ЕХАТЬ', 434, 74, 7);
+    wrapText(I.desc, 192).forEach((l, i) => tx(l, 434, 43 + i * LINE_H, 25));
+    tx('КАК ЕХАТЬ', 434, 70, 7);
     Object.keys(MODES).forEach((m, i) => {
-      const M = MODES[m], short = S.res.charge < M.charge;
+      const M = MODES[m], short = S.res.charge < M.charge, p = ambushChance(S, n, m);
       const cost = '−' + M.charge + ' Заряд · +' + M.hours + ' ч' + (M.wanted ? ' · −1 Розыск' : '');
-      if (btn(434, 86 + i * 46, 192, 40, M.name.toUpperCase(), {
-        line2: short ? 'заряда не хватит: буксир' : cost, line2Col: short ? 30 : 24,
-        tip: M.desc + (short ? ' Заряда не хватит: приедешь на буксире за 40 кр.' : ''),
+      const risk = p >= 1 ? 'засада: будет бой' : p <= 0 ? 'засада: нет' : 'засада: ' + Math.round(p * 100) + ' %';
+      if (btn(434, 82 + i * 49, 192, 44, M.name.toUpperCase(), {
+        line2: short ? 'заряда не хватит: буксир за 40 кр' : cost, line2Col: short ? 30 : 24,
+        line3: risk, line3Col: p >= 1 ? 16 : p <= 0 ? 28 : 19, tip: M.desc,
       })) go({ type: 'travel', to: n.id, mode: m });
     });
   } else {
     tx('МАРШРУТ', 434, 30, 19);
-    wrapText('Выбери соседний узел на карте, затем режим езды.', 192).forEach((l, i) => tx(l, 434, 46 + i * LINE_H, 25));
-    wrapText('Типы узлов видны только на шаг вперёд. До КПП нужно дожить: ноль в двух ресурсах сразу — конец рейса.', 192)
-      .forEach((l, i) => tx(l, 434, 76 + i * LINE_H, 6));
-    tx('ПОДСВЕЧЕНЫ ДОСТУПНЫЕ УЗЛЫ', 434, 150, 11);
+    wrapText('Нажми на подсвеченный узел, затем выбери режим езды.', 192).forEach((l, i) => tx(l, 434, 46 + i * LINE_H, 25));
+    wrapText('Бои случаются в пути, а не в узлах. Череп — перегон с засадой наверняка, на остальных дорогах она возможна.', 192)
+      .forEach((l, i) => tx(l, 434, 76 + i * LINE_H, 7));
+    wrapText('Типы узлов видны только на шаг вперёд.', 192).forEach((l, i) => tx(l, 434, 136 + i * LINE_H, 6));
   }
 
   const lane = scene(238, 108);
   sprCar(c, 28, lane, ui.f, false);
-  drawRain(c, 238, 108, ui.t);
+  drawRain(c, 238, 108, ui.t, true);
   for (let i = 0; i < 3; i++) crewCard(150 + i * 112, 244, i);
   if (btn(490, 244, 144, 24, 'БАГАЖНИК', { tip: 'Переложить вещи, зарядить бардачок, применить предмет.' })) openTrunk();
   muteBtn(558, 272);
   tipBar(346);
+
+  coach('hud', 'Это ресурсы рейса. Заряд, Корпус и Фокус тратятся, Розыск копится. Ноль в одном из них — дорогой штраф, ноль в двух сразу — конец рейса.', [2, 1, 470, 16], 150, 30);
+  if (ui.selNode == null) coach('map', 'Карта района. Цель — КПП на правом краю. Нажми на подсвеченный узел: он станет пунктом назначения.', [8, 24, 412, 190], 392, 110);
+  else coach('mode', 'Режим езды решает, чем платить за переезд: Зарядом, временем или Розыском. Ниже написан шанс, что по дороге нагонит засада.', [428, 80, 204, 150], 180, 90);
+  if (S.crew.length) coach('crew', 'В машине попутчик. В бою у него есть навык, в событиях он открывает новые варианты. Доверие растёт от разговоров на стоянке.', [148, 242, 336, 54], 150, 130);
+  if (S.stats.nodes >= 1) coach('trunkbtn', 'В бою доступны только три слота бардачка. Загляни в багажник и переложи туда мелочь заранее.', [488, 242, 148, 28], 380, 140);
 }
 
+// ---------- дорога ----------
+
 function scDrive() {
+  let d = S.drive;
+  const M = MODES[d.mode], type = S.map.nodes[S.at].type, top = SCENE_TOP, paused = ui.coachOn || !ui.auto;
   drawHUD();
-  const lane = scene(SCENE_TOP, 230);
-  sprCar(c, 120, lane, ui.f, true);
-  drawForeground(c, SCENE_TOP, 230, ui.scroll);
-  drawRain(c, SCENE_TOP, 230, ui.t);
+
+  if (ui.input) {
+    if (keyAny('ArrowUp', 'w', 'W', 'ц', 'Ц')) go({ type: 'steer', dir: -1 });
+    if (keyAny('ArrowDown', 's', 'S', 'ы', 'Ы')) go({ type: 'steer', dir: 1 });
+    if (ui.click && ui.my >= top && ui.my < PANEL_Y) {
+      // клик по полосе — машина едет на неё; клик выше дороги — на полосу вверх
+      const want = ui.my < top + ROAD_Y ? Math.max(0, d.lane - 1) : ui.my < top + LANES[0] + 6 ? 0 : ui.my < top + LANES[1] + 6 ? 1 : 2;
+      while (d.lane !== want && go({ type: 'steer', dir: want < d.lane ? -1 : 1 })) { /* по шагу за раз */ }
+      ui.click = false;
+    }
+  }
+  if (!paused) {
+    ui.acc += ui.dt;
+    if (ui.acc >= M.tick) {
+      ui.acc = ui.acc >= 2 * M.tick ? 0 : ui.acc - M.tick;
+      go({ type: 'tick' });
+      if (S.screen !== 'drive') return;   // бой, итог или прибытие: новый экран нарисуется следующим кадром
+      d = S.drive;
+    }
+  }
+
+  const frac = clamp(ui.acc / M.tick, 0, 1);
+  scene(top, 230, true);
+  easeLane(d.lane);
+  const cy = carY(top), carRow = Math.round(ui.carLane);
+  for (let lane = 0; lane < 3; lane++) {
+    for (const o of d.objs) {
+      if (o.lane !== lane) continue;
+      const x = Math.round(CAR_X + 48 + (o.x - d.pos - frac) * COL_W);
+      if (x < -20 || x > W + 20) continue;
+      sprObject(c, o.k, x, top + LANES[lane], ui.f);
+      const ahead = o.x - d.pos;
+      if (ROAD_OBJ[o.k].bad && lane === d.lane && ahead > 0 && ahead <= 3 && (ui.f & 1)) label('!', x, top + LANES[lane] - 34, 16);
+    }
+    if (lane === carRow) sprCar(c, CAR_X, cy, ui.f, !paused);
+  }
+  drawRain(c, top, 230, ui.t, true);
+
+  // сверху: куда едем и сколько осталось
+  const head = type === 'road' ? 'ОПАСНЫЙ ПЕРЕГОН' : 'В ПУТИ: ' + NODE_INFO[type].name.toUpperCase();
+  label(head, 8 + textW(head) / 2, 24, type === 'road' ? 16 : 25);
+  rc(229, 25, 332, 7, 0); rc(230, 26, 330, 5, 2);
+  rc(230, 26, Math.round(330 * Math.min(1, (d.pos + frac) / d.len)), 5, 11);
+  rc(564, 20, 22, 16, 0); drawIcon(c, type, 571, 24, NODE_COL[type]);
+  if (d.ambushAt >= 0 && d.ambushAt - d.pos <= 2) label('ЗАСАДА!', W / 2, 44, ui.f & 1 ? 16 : 26);
+
   rc(0, PANEL_Y, W, H - PANEL_Y, 0); rc(0, PANEL_Y, W, 1, 4);
-  const M = MODES[S.drive.mode];
-  txC('В ПУТИ · ' + M.name.toUpperCase(), W / 2, 262, 19, 2);
-  txC(M.desc, W / 2, 286, 25);
-  const p = Math.min(1, (ui.t - ui.driveT0) / 2400);
-  rc(170, 304, 300, 6, 2); rc(170, 304, Math.round(300 * p), 6, 11);
-  if (S.drive.dawn) txC('Рассвет: Фокус −2', W / 2, 318, 19);
-  txC('клик — пропустить', W / 2, 340, 6);
-  if (p >= 1 || ui.click || key('Enter') || key(' ')) { ui.click = false; go({ type: 'arrive' }); }
+  for (let i = 0; i < 3; i++) crewCard(4 + i * 112, 254, i);
+  tx('РЕЖИМ: ' + M.name.toUpperCase(), 6, 312, 19);
+  wrapText(M.desc, 328).forEach((l, i) => tx(l, 6, 324 + i * LINE_H, 24));
+  if (d.dawn) tx('Рассвет: этот переезд стоил 2 Фокуса', 6, 348, 19);
+  Object.keys(ROAD_OBJ).forEach((k, i) => {
+    const O = ROAD_OBJ[k], y = 276 + i * 24;
+    sprObject(c, k, 362, y, 0);
+    tx(O.name, 380, y - 14, O.bad ? 16 : k === 'cell' ? 12 : 20);
+    tx(RES_NAME[O.res] + (O.n > 0 ? ' +' : ' −') + Math.abs(O.n) + (O.res === 'credits' ? ' кр' : ''), 436, y - 14, 25);
+  });
+  tx('ПЕРЕСТРОЕНИЕ', 532, 258, 7);
+  tx('↑ ↓ или W S', 532, 271, 26);
+  tx('клик по полосе', 532, 283, 26);
+  wrapText('Бой может начаться прямо в пути.', 100).forEach((l, i) => tx(l, 532, 304 + i * LINE_H, 6));
+
+  coach('drive', 'Машина едет сама, ты выбираешь полосу: стрелки ↑ ↓, клавиши W S или клик по полосе. Объезжай обломки и сканеры в розовом контуре, подбирай батареи и чипы.', [2, top + ROAD_Y - 6, 636, 60], 200, 70);
 }
 
 // ---------- бой ----------
 
 const BAND_X = [150, 315, 480], BAND_W = 160, BAND_NAME = ['ВПЛОТНУЮ', 'СРЕДНЯЯ', 'ДАЛЬНЯЯ'];
+const BAND_REACH = ['таран · стволы · взлом', 'стволы · взлом', 'только взлом'];
 
 // Метка намерения: [текст, цвет плашки]. Плашки сплошные и яркие, чтобы не путались с вывесками на фоне.
 function intentLook(it) {
@@ -309,7 +434,7 @@ function layoutEnemies(lane) {
     inBand.forEach(([e, i]) => {
       const [w, h] = SPR_SIZE[e.type];
       let px, py;
-      if (ENEMIES[e.type].air) { px = BAND_X[d] + 18 + (ak % 3) * 48; py = lane - 86 - (ak % 2) * 36; ak++; }
+      if (ENEMIES[e.type].air) { px = BAND_X[d] + 18 + (ak % 3) * 48; py = lane - 80 - (ak % 2) * 40; ak++; }
       else { px = Math.round(gx); py = lane; gx += (w + 8) * squeeze; }
       const p = ui.disp[i] || (ui.disp[i] = { x: 670, y: py, w, h });
       p.tx = px; p.ty = py; p.w = w; p.h = h;
@@ -327,13 +452,16 @@ function pressAction(a) {
 function scBattle() {
   const b = S.battle, r = S.res;
   drawHUD();
-  const lane = scene(SCENE_TOP, 230);
+  const lane = scene(SCENE_TOP, 230, true);
   for (let d = 0; d < 3; d++) {
-    txC(BAND_NAME[d], BAND_X[d] + BAND_W / 2, 23, 7);
-    for (let y = 34; y < 212; y += 4) rc(BAND_X[d] - 3, y, 1, 2, 6);
+    for (let y = 46; y < SCENE_TOP + ROAD_Y - 8; y += 4) rc(BAND_X[d] - 3, y, 1, 2, 6);
+    label(BAND_NAME[d], BAND_X[d] + BAND_W / 2, 23, 26);
+    label(BAND_REACH[d], BAND_X[d] + BAND_W / 2, 35, 7);
   }
-  sprCar(c, 24, lane, ui.f, true);
-  if (b.shield > 0) { corners(20, lane - 40, 104, 44, ui.f & 1 ? 12 : 11); }
+  easeLane(1);
+  const cy = carY(SCENE_TOP);
+  sprCar(c, CAR_X, cy, ui.f, true);
+  if (b.shield > 0) corners(CAR_X - 4, cy - 40, 104, 44, ui.f & 1 ? 12 : 11);
 
   layoutEnemies(lane);
   const valid = ui.target ? battleTargets(S, ui.target) : [];
@@ -347,38 +475,38 @@ function scBattle() {
     if (E.air) y += Math.round(Math.sin(ui.t / 320 + i * 2) * 2);
     if (ui.flash && ui.flash.i === i && ui.t < ui.flash.until) x -= 6;
     sprEnemy(c, e.type, x, y, ui.f + i, e);
-    const top = y - p.h, bw = Math.max(34, p.w);
-    rc(x, top - 7, bw, 5, 0);
-    rc(x + 1, top - 6, Math.max(1, Math.round((bw - 2) * e.hp / e.max)), 3, 30);
-    tx(String(e.hp), x + bw + 3, top - 8, 25);
+    const top = y - p.h, bw = Math.max(34, p.w), mid = x + (p.w >> 1);
+    label(E.name, mid, y + 4, 16);
+    rc(x - 1, top - 9, bw + 2, 7, 0);
+    rc(x, top - 8, Math.max(1, Math.round(bw * e.hp / e.max)), 5, 30);
+    label(String(e.hp), x + bw + 9, top - 9, 26);
     const look = intentLook(intentOf(S, e)), tw = textW(look[0]) + 8;
-    const ix = clamp(x + (p.w >> 1) - (tw >> 1), 2, W - tw - 2);
-    const mid = x + (p.w >> 1);
-    rc(ix - 1, top - 23, tw + 2, 13, 0); rc(ix, top - 22, tw, 11, look[1]); tx(look[0], ix + 4, top - 20, 0);
-    rc(mid - 2, top - 11, 5, 1, look[1]); rc(mid - 1, top - 10, 3, 1, look[1]);
+    const ix = clamp(mid - (tw >> 1), 2, W - tw - 2);
+    rc(ix - 1, top - 25, tw + 2, 13, 0); rc(ix, top - 24, tw, 11, look[1]); tx(look[0], ix + 4, top - 22, 0);
+    rc(mid - 2, top - 13, 5, 1, look[1]); rc(mid - 1, top - 12, 3, 1, look[1]);
     if (seer) {
       const nx = 'далее: ' + intentLook(nextIntent(S, e))[0], nw = textW(nx) + 6, nxx = clamp(ix, 2, W - nw - 2);
-      rc(nxx - 1, top - 35, nw, 11, 0); tx(nx, nxx + 2, top - 33, 7);
+      rc(nxx - 1, top - 37, nw, 11, 0); tx(nx, nxx + 2, top - 35, 7);
     }
-    if (b.mark === i) { rc(x + (p.w >> 1) - 4, top + (p.h >> 1), 9, 1, 19); rc(x + (p.w >> 1), top + (p.h >> 1) - 4, 1, 9, 19); }
-    const over = hover(Math.min(x, ix) - 3, top - 24, Math.max(bw, tw) + 6, p.h + 26);
+    if (b.mark === i) { rc(mid - 4, top + (p.h >> 1), 9, 1, 19); rc(mid, top + (p.h >> 1) - 4, 1, 9, 19); }
+    const over = hover(Math.min(x, ix) - 3, top - 26, Math.max(bw, tw) + 6, p.h + 40);
     if (ui.target && valid.includes(i)) {
-      corners(x - 3, top - 3, p.w + 6, p.h + 6, over ? 26 : ui.f & 1 ? 12 : 11);
+      corners(x - 4, top - 4, p.w + 8, p.h + 8, over ? 26 : ui.f & 1 ? 12 : 11);
       if (over && ui.click) { ui.click = false; go(Object.assign({}, ui.target, { target: i })); }
     }
     if (over && S.battle) ui.tip = E.name + ' · ' + e.hp + '/' + e.max + ' · ' + E.desc;
   });
-  if (!S.battle) return;   // бой закончился этим кликом
+  if (S.screen !== 'battle') return;   // бой закончился этим кликом
   if (ui.target && (ui.cancel || (ui.click && ui.my < PANEL_Y))) { ui.target = null; ui.click = false; }
 
-  drawRain(c, SCENE_TOP, 230, ui.t);
-  tx('ХОД ' + b.turn, 6, 24, 25);
-  tx('ОД', 6, 38, 19);
-  for (let i = 0; i < Math.max(3, b.ap); i++) rc(22 + i * 10, 37, 8, 8, i < b.ap ? 19 : 17);
-  let sy = 51;
-  if (b.shield > 0) { tx('ЩИТ ' + b.shield, 6, sy, 12); sy += 11; }
-  if (b.escape > 0) { tx('ОТРЫВ ' + b.escape + ' %', 6, sy, 28); sy += 11; }
-  if (!b.boss) tx('патруль через ' + (6 - b.heat) + ' х.', 6, sy, 6);
+  drawRain(c, SCENE_TOP, 230, ui.t, true);
+  rc(2, 21, 104, 11, 0); tx('ХОД ' + b.turn, 6, 23, 26);
+  rc(2, 34, 104, 13, 0); tx('ОД', 6, 37, 20);
+  for (let i = 0; i < Math.max(3, b.ap); i++) rc(22 + i * 11, 36, 9, 9, i < b.ap ? 19 : 17);
+  let sy = 50;
+  if (b.shield > 0) { rc(2, sy - 2, 104, 11, 0); tx('ЩИТ ' + b.shield, 6, sy, 12); sy += 12; }
+  if (b.escape > 0) { rc(2, sy - 2, 104, 11, 0); tx('ОТРЫВ ' + b.escape + ' %', 6, sy, 28); sy += 12; }
+  if (!b.boss) { rc(2, sy - 2, 104, 11, 0); tx('патруль через ' + (6 - b.heat) + ' х.', 6, sy, 7); }
 
   rc(0, PANEL_Y, W, H - PANEL_Y, 0); rc(0, PANEL_Y, W, 1, 4);
   const busy = ui.t < ui.lockUntil;
@@ -420,11 +548,23 @@ function scBattle() {
     if (btn(360 + (i % 2) * 140, 266 + (i >> 1) * 23, 136, 20, d[1], { sub: d[2], off: !!why, why: d[1] + ': ' + why, tip: d[3], on })) pressAction(a);
   });
   if (btn(360, 335, 276, 20, 'КОНЕЦ ХОДА', { accent: b.ap === 0, tip: 'Враги выполняют намерения, которые показаны над ними.' }) ||
-      (!busy && !ui.target && (key('Enter') || key(' ')))) go({ type: 'endTurn' });
+      (!busy && !ui.target && keyAny('Enter', ' '))) go({ type: 'endTurn' });
 
   // строка подсказки: цель, подсказка под курсором или последняя запись журнала
-  const line = ui.target ? 'Выбери цель. Клик мимо или Esc — отмена.' : ui.tip || (S.battle ? S.battle.log[S.battle.log.length - 1] : '') || 'Метка над врагом показывает, что он сделает в конце хода.';
-  tx(wrapText(line, W - 12)[0], 6, 254, ui.target ? 12 : ui.tip ? 25 : 24);
+  const log = S.battle ? S.battle.log[S.battle.log.length - 1] : '';
+  const line = ui.target ? 'Выбери цель. Клик мимо или Esc — отмена.' : ui.tip || log || 'Плашка над врагом показывает, что он сделает в конце хода.';
+  tx(wrapText(line, W - 12)[0], 6, 254, ui.target ? 12 : ui.tip ? 26 : 24);
+
+  if (S.screen !== 'battle' || busy) return;
+  coach('battle', 'Засада: бой идёт прямо на ходу. Над каждым врагом плашка — что он сделает, когда ты нажмёшь «Конец хода». У тебя 3 ОД на ход.', [150, 60, 486, 170], 4, 66);
+  coach('dist', 'Враги стоят на трёх дистанциях. Под названием дистанции написано, чем туда можно достать: чем ближе враг, тем больше вариантов.', [148, 20, 490, 26], 200, 70);
+  coach('acts', 'Действия машины. «Подтянуть» и «Оттеснить» двигают врага между дистанциями за 1 Заряд. Наведи на кнопку — внизу появится описание.', [358, 264, 280, 94], 110, 130);
+  const dodge = b.enemies.some((e, i) => e.hp > 0 && intentOf(S, e).k === 'hit' && e.dist === ENEMIES[e.type].reach && !battleWhy(S, { type: 'push', target: i }));
+  if (dodge && b.turn >= 2) coach('push', 'Враг готовит удар. Оттесни его туда, откуда он не достаёт: удар сорвётся, а он потратит ход на сближение.', [498, 310, 140, 24], 250, 150);
+  if (S.crew.length) coach('skill', 'Навык попутчика — кнопка с его портретом. После применения навык уходит на откат на несколько ходов.', [2, 264, 246, 94], 60, 140);
+  if (S.glove.some((id, slot) => id && !battleWhy(S, { type: 'item', slot }))) {
+    coach('glove', 'Предмет из бардачка не тратит ОД, но применить можно только один за ход. Сюда попадает то, что ты заранее положил через «Багажник».', [250, 264, 108, 50], 190, 140);
+  }
 }
 
 // ---------- текстовые экраны ----------
@@ -434,7 +574,7 @@ function textPanel(title) {
   drawHUD();
   const lane = scene(SCENE_TOP, 118);
   sprCar(c, 60, lane, ui.f, false);
-  drawRain(c, SCENE_TOP, 118, ui.t);
+  drawRain(c, SCENE_TOP, 118, ui.t, true);
   panel(6, 140, 628, 214, 0, 4);
   tx(title.toUpperCase(), 18, 150, 19, 2);
 }
@@ -444,37 +584,39 @@ function scEvent() {
   textPanel(v.title);
   if (hitch) { panel(576, 146, 38, 38, 0, 19); portrait(c, 579, 149, S.event.who); }
   let y = 174;
-  wrapText(v.text, hitch ? 540 : 600).forEach(l => { tx(l, 18, y, 25); y += LINE_H; });
+  wrapText(v.text, hitch ? 540 : 600).forEach(l => { tx(l, 18, y, 26); y += LINE_H + 1; });
   y = Math.max(y + 8, 240);
   v.options.forEach((o, i) => {
-    const label = (i + 1) + '. ' + o.label;
-    if (btn(18, y, 604, 22, label, { off: !o.ok, sub: o.ok ? '' : o.why, subCol: 30, left: true, why: o.why }) || (o.ok && key(String(i + 1)))) go({ type: 'choose', i });
+    if (btn(18, y, 604, 22, (i + 1) + '. ' + o.label, { off: !o.ok, sub: o.ok ? '' : o.why, subCol: 30, left: true, why: o.why }) || (o.ok && key(String(i + 1)))) go({ type: 'choose', i });
     y += 26;
   });
+  if (hitch) coach('hitch', 'Попутчик даёт навык в бою и новые варианты в событиях, но у каждого есть минус. Мест в салоне три.', [16, 238, 608, 52], 380, 30);
+  else coach('event', 'Событие в пути: у каждого варианта своя цена. Серые варианты откроются, если в машине нужный попутчик или хватает кредитов.', [16, 238, 608, 80], 380, 30);
 }
 
 function scResult() {
   const r = S.result;
   textPanel(r.title);
   let y = 176;
-  r.lines.forEach(line => { wrapText(line, 600).forEach(l => { tx(l, 18, y, 25); y += LINE_H; }); y += 3; });
+  r.lines.forEach(line => { wrapText(line, 600).forEach(l => { tx(l, 18, y, 26); y += LINE_H + 1; }); y += 3; });
   y += 6;
   let x = 18;
   r.deltas.forEach(d => {
     const hour = d.k === 'hour';
-    const label = (hour ? 'ВРЕМЯ' : RES_NAME[d.k].toUpperCase()) + ' ' + (d.n > 0 ? '+' : '−') + Math.abs(d.n) + (hour ? ' ч' : '');
-    const good = d.k === 'wanted' ? d.n < 0 : d.n > 0, col = hour ? 24 : good ? 28 : 30, w = textW(label) + 10;
+    const text = (hour ? 'ВРЕМЯ' : RES_NAME[d.k].toUpperCase()) + ' ' + (d.n > 0 ? '+' : '−') + Math.abs(d.n) + (hour ? ' ч' : '');
+    const good = d.k === 'wanted' ? d.n < 0 : d.n > 0, col = hour ? 24 : good ? 28 : 30, w = textW(text) + 10;
     if (x + w > 622) { x = 18; y += 17; }
-    panel(x, y, w, 13, 0, col); tx(label, x + 5, y + 3, col);
+    panel(x, y, w, 13, 0, col); tx(text, x + 5, y + 3, col);
     x += w + 5;
   });
-  if (btn(220, 324, 200, 24, 'ДАЛЬШЕ', { accent: true }) || key('Enter') || key(' ')) go({ type: 'continue' });
+  const next = r.then === 'drive' ? 'ЕХАТЬ ДАЛЬШЕ' : 'ДАЛЬШЕ';
+  if (btn(220, 324, 200, 24, next, { accent: true }) || keyAny('Enter', ' ')) go({ type: 'continue' });
 }
 
 function scPark() {
   textPanel('Стоянка');
   const r = S.res, p = S.park, fee = crewHas(S, 'mechanic') ? 10 : 0;
-  tx('Тихий двор под эстакадой. Колонка, кофейный автомат и никого вокруг.', 18, 174, 25);
+  tx('Тихий двор под эстакадой. Колонка, кофейный автомат и никого вокруг.', 18, 174, 26);
   if (btn(18, 192, 296, 22, 'ОТДОХНУТЬ', { sub: '+5 Фокус, +3 ч' + (fee ? ', −10 кр' : ''), off: p.rested || r.credits < fee,
     why: p.rested ? 'Сегодня уже отдыхали' : 'Не хватает кредитов', tip: 'Сон в машине. Время идёт, рассвет ближе.' })) go({ type: 'rest' });
   if (btn(18, 218, 296, 22, 'ЗАРЯДКА', { sub: '+4 Заряд за 15 кр', off: r.credits < 15 || r.charge >= S.max.charge,
@@ -490,6 +632,7 @@ function scPark() {
   if (ui.tip) tx(wrapText(ui.tip, 600)[0], 18, 290, 7);
   if (btn(18, 322, 190, 24, 'БАГАЖНИК')) openTrunk();
   if (btn(432, 322, 190, 24, 'ЕХАТЬ ДАЛЬШЕ', { accent: true })) go({ type: 'leave' });
+  coach('park', 'Стоянка — единственное место, где ресурсы восстанавливаются. Отдых возвращает Фокус, но съедает 3 часа: после рассвета каждый переезд стоит Фокуса.', [16, 190, 300, 78], 380, 30);
 }
 
 function scShop() {
@@ -514,11 +657,12 @@ function scShop() {
     const D = ITEMS[t.id];
     if (btn(222, 275 + i * 19, 196, 17, D.name, { sub: '+' + D.sell + ' кр', tip: 'Продать: ' + D.name })) go({ type: 'sell', uid: t.uid });
   });
-  tx('ПОДСКАЗКА', 426, 172, 7);
+  tx('ОПИСАНИЕ', 426, 172, 7);
   wrapText(ui.tip || 'Наведи на товар, чтобы прочитать описание. В бардачок помещается только мелочь.', 196)
-    .slice(0, 8).forEach((l, i) => tx(l, 426, 185 + i * LINE_H, 25));
+    .slice(0, 8).forEach((l, i) => tx(l, 426, 185 + i * (LINE_H + 1), 26));
   if (btn(426, 296, 196, 22, 'БАГАЖНИК')) openTrunk();
   if (btn(426, 324, 196, 24, 'ЕХАТЬ ДАЛЬШЕ', { accent: true })) go({ type: 'leave' });
+  coach('shop', 'Мастерская: припасы, апгрейды навсегда и скупка лута. Наведи на строку — справа появится описание. Купленная мелочь ложится в багажник.', [16, 170, 404, 150], 380, 30);
 }
 
 function scEnd() {
@@ -530,11 +674,11 @@ function scEnd() {
   bigTitle(o.win ? 'ДЕМО ПРОЙДЕНО' : 'РЕЙС ОКОНЧЕН', 14, o.win ? 12 : 16, o.win ? 9 : 29);
   panel(60, 70, 520, 92, 0, o.win ? 11 : 15);
   let y = 78;
-  wrapText(o.text, 500).forEach(l => { tx(l, 70, y, 25); y += LINE_H; });
+  wrapText(o.text, 500).forEach(l => { tx(l, 70, y, 26); y += LINE_H + 1; });
   y += 6;
   tx('Узлов пройдено: ' + st.nodes + ' · Боёв: ' + st.battles + ' (побед ' + st.wins + ', отрывов ' + st.escapes + ')', 70, y, 7);
-  tx('Критических событий: ' + st.crits + ' · Финиш в ' + clockText(S.hour) + ' · Кредиты: ' + S.res.credits + ' · Розыск: ' + S.res.wanted, 70, y + 12, 7);
-  tx('Сид заезда: ' + S.seed, 70, y + 24, 6);
+  tx('На дороге: задето ' + st.hits + ', подобрано ' + st.picks + ' · Критических событий: ' + st.crits, 70, y + 12, 7);
+  tx('Финиш в ' + clockText(S.hour) + ' · Кредиты: ' + S.res.credits + ' · Розыск: ' + S.res.wanted + ' · Сид заезда: ' + S.seed, 70, y + 24, 6);
   rc(0, 290, W, 70, 0); rc(0, 290, W, 1, 4);
   if (btn(120, 312, 190, 26, 'НОВЫЙ РЕЙС', { accent: true })) newGame();
   if (btn(330, 312, 190, 26, 'ТОТ ЖЕ СИД')) newGame(S.seed);
@@ -598,10 +742,10 @@ function drawTrunk() {
     const D = ITEMS[selId];
     tx(D.name.toUpperCase(), X + 200, Y + 92, 19);
     tx(D.w + '×' + D.h + (D.small ? ' · влезает в бардачок' : ''), X + 200, Y + 104, 6);
-    wrapText(D.desc, 224).forEach((l, i) => tx(l, X + 200, Y + 118 + i * LINE_H, 25));
+    wrapText(D.desc, 224).forEach((l, i) => tx(l, X + 200, Y + 118 + i * LINE_H, 26));
   } else {
     wrapText('Выбери предмет, затем клетку, куда его переложить. Пустой слот бардачка принимает выбранную мелочь.', 224)
-      .forEach((l, i) => tx(l, X + 200, Y + 92 + i * LINE_H, 6));
+      .forEach((l, i) => tx(l, X + 200, Y + 92 + i * LINE_H, 7));
   }
   if (ui.tip) wrapText(ui.tip, 408).slice(0, 2).forEach((l, i) => tx(l, X + 16, Y + 158 + i * LINE_H, 7));
 
@@ -621,6 +765,7 @@ function drawTrunk() {
     if (ask) { go({ type: 'drop', uid: selIt.uid }); ui.sel = null; } else ui.dropAsk = selIt.uid;
   }
   if (ui.rot != null && selIt) tx('Повёрнуто: укажи клетку, куда положить.', X + 16, by - 14, 19);
+  coach('trunk', 'Нажми на предмет, затем на клетку — он переедет. Мелочь 1×1 можно положить в слот бардачка: только оттуда она доступна в бою.', [gx - 2, gy - 2, TRUNK_W * cs + 2, TRUNK_H * cs + 2], X + 196, Y + 150);
 }
 
 // ---------- запуск ----------
@@ -630,30 +775,39 @@ const SCREEN = { title: scTitle, map: scMap, drive: scDrive, battle: scBattle, e
 function frame(now) {
   ui.dt = Math.min(100, Math.max(0, now - ui.t)); ui.t = now; ui.f = Math.floor(now / 125);
   ui.tip = '';
-  ui.scroll += ({ title: 50, drive: 170, battle: 110, end: 30 }[S.screen] || 0) * ui.dt / 1000;
+  // фон движется со скоростью машины: на дороге — ровно один столбец за отрезок
+  const speed = S.screen === 'drive' ? (ui.coachOn || !ui.auto ? 0 : COL_W * 1000 / MODES[S.drive.mode].tick) : ({ title: 50, battle: 110, end: 30 }[S.screen] || 0);
+  ui.scroll += speed * ui.dt / 1000;
   takeFx();
-  ui.input = !ui.trunk && now >= ui.lockUntil;
+  const free = !ui.coachOn;
+  ui.input = free && !ui.trunk && now >= ui.lockUntil;
+  ui.keysLive = free;
   if (key('Escape')) ui.target = null;
+  ui.coach = null;
   SCREEN[S.screen]();
-  if (ui.trunk) { ui.input = true; ui.tip = ''; drawTrunk(); }
+  if (ui.trunk) { ui.input = free; ui.tip = ''; drawTrunk(); }
   drawFloats();
-  ui.click = false; ui.cancel = false; ui.keys.length = 0;
+  drawCoach();
+  ui.click = false; ui.cancel = false; ui.keys = ui.keep || []; ui.keep = null;
   requestAnimationFrame(frame);
 }
 
 // Масштаб: один игровой пиксель = целое число пикселей экрана (с учётом плотности дисплея).
-// Если так картинка выходит мелкой, кнопка под экраном растягивает её на всё доступное место.
+// Если при этом картинка занимает меньше 80 % доступного места, по умолчанию она растягивается:
+// мелкий текст хуже неровного пикселя. Кнопка под экраном переключает режим вручную.
 function fitCanvas() {
   const availW = cv.parentElement.clientWidth, availH = Math.max(240, window.innerHeight - 56);
   const fit = Math.min(availW / W, availH / H), dpr = window.devicePixelRatio || 1;
   const sharp = fit < 1 ? fit : Math.max(1, Math.floor(fit * dpr) / dpr);
-  const k = ui.stretch ? fit : sharp;
+  const stretch = ui.stretch == null ? sharp < fit * 0.8 : ui.stretch;
+  const k = stretch ? fit : sharp;
   cv.style.width = Math.floor(W * k) + 'px';
   cv.style.height = Math.floor(H * k) + 'px';
   const b = document.getElementById('fit');
   if (b) {
-    b.textContent = (ui.stretch ? 'Масштаб: во весь экран' : 'Масштаб: чёткий пиксель') + ' ×' + (Math.round(k * 100) / 100);
+    b.textContent = (stretch ? 'Масштаб: во весь экран' : 'Масштаб: чёткий пиксель') + ' ×' + (Math.round(k * 100) / 100);
     b.hidden = fit < 1 || Math.abs(fit - sharp) < 0.02;
+    b.dataset.stretch = stretch ? '1' : '';
   }
 }
 
@@ -669,13 +823,14 @@ function bindInput() {
   cv.addEventListener('contextmenu', e => e.preventDefault());
   window.addEventListener('keydown', e => {
     ui.keys.push(e.key);
-    if (e.key === ' ' && (e.target === document.body || e.target === cv)) e.preventDefault();
+    // стрелки и пробел управляют игрой, а не прокручивают страницу
+    if ([' ', 'ArrowUp', 'ArrowDown'].includes(e.key) && (e.target === document.body || e.target === cv)) e.preventDefault();
   });
   window.addEventListener('resize', fitCanvas);
   const fb = document.getElementById('fit');
   if (fb) fb.addEventListener('click', () => {
-    ui.stretch = !ui.stretch;
-    try { localStorage.setItem('nd-stretch', ui.stretch ? '1' : ''); } catch (e) { /* без хранилища тоже работает */ }
+    ui.stretch = !fb.dataset.stretch;
+    try { localStorage.setItem('nd-stretch', ui.stretch ? '1' : '0'); } catch (e) { /* без хранилища тоже работает */ }
     fitCanvas();
   });
 }
@@ -685,13 +840,15 @@ function start(data) {
   c = cv.getContext('2d');
   c.imageSmoothingEnabled = false;
   buildScene();
-  try { ui.stretch = localStorage.getItem('nd-stretch') === '1'; } catch (e) { ui.stretch = false; }
+  try { const v = localStorage.getItem('nd-stretch'); ui.stretch = v === '1' ? true : v === '0' ? false : null; } catch (e) { ui.stretch = null; }
+  loadHints();
   bindInput();
   fitCanvas();
   const m = /^#s(\d{1,9})$/.exec(location.hash || '');
-  if (data && data.S && data.S.map && data.S.screen) { S = data.S; S.fx = []; if (S.screen === 'drive') ui.driveT0 = -1e9; }
+  if (data && data.S && data.S.map && data.S.screen && (data.S.screen !== 'drive' || (data.S.drive && data.S.drive.objs))) { S = data.S; S.fx = []; }
   else newGame(m ? Number(m[1]) : null);
-  // хук для автотестов: состояние, действия и интерфейс доступны снаружи
+  // хук для автотестов: состояние, действия и интерфейс доступны снаружи.
+  // ui.auto = false останавливает самоход на дороге, ui.hintsOff = true убирает подсказки.
   window.__nd = {
     get state() { return S; }, go, ui, newGame,
     // заготовки сцен для ручной проверки и скриншотов

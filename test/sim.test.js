@@ -40,6 +40,11 @@ function checkInvariants(s) {
     });
     assert.ok(s.battle.ap >= 0, 'ОД ниже нуля');
   } else assert.equal(s.battle, null, 'бой остался после выхода с экрана');
+  if (s.screen === 'drive') {
+    assert.ok(s.drive, 'экран дороги без перегона');
+    assert.ok(s.drive.lane >= 0 && s.drive.lane <= 2 && s.drive.pos >= 0 && s.drive.pos <= s.drive.len, 'машина вне дороги');
+  }
+  if (s.screen === 'map' || s.screen === 'park' || s.screen === 'shop' || s.screen === 'event') assert.equal(s.drive, null, 'перегон не закрыт по прибытии');
   if (s.screen === 'event') assert.ok(G.eventView(s).options.some(o => o.ok), 'событие без доступных вариантов');
   if (s.screen === 'end') assert.ok(s.over, 'финал без результата');
 }
@@ -92,6 +97,61 @@ test('карта: от старта до КПП 7 переходов, все у�
     assert.ok(nodes.filter(n => n.type !== 'gate').every(n => n.next.length > 0), 'тупик');
     for (const t of ['park', 'shop', 'gate']) assert.ok(nodes.some(n => n.type === t), 'нет узла ' + t);
   }
+});
+
+test('дорога: в каждом столбце есть свободная полоса, после двойного препятствия пусто', () => {
+  for (let seed = 1; seed <= 300; seed++) {
+    const objs = G.genRoad({ rng: seed }, seed % 3 ? 'fast' : 'quiet');
+    const bad = x => objs.filter(o => o.x === x && G.ROAD_OBJ[o.k].bad).length;
+    for (let x = 0; x <= G.TRIP_LEN; x++) {
+      assert.ok(bad(x) <= 2, 'все три полосы заняты');
+      assert.ok(new Set(objs.filter(o => o.x === x).map(o => o.lane)).size === objs.filter(o => o.x === x).length, 'два объекта в одной клетке');
+      if (bad(x) === 2) assert.equal(objs.filter(o => o.x === x + 1).length, 0, 'нет передышки после двойного препятствия');
+    }
+    assert.ok(objs.every(o => o.x >= 3 && o.x < G.TRIP_LEN), 'объект вне перегона');
+    if (seed % 3 === 0) assert.ok(objs.every(o => o.k !== 'cam'), 'в тихом режиме сканеров нет');
+  }
+});
+
+test('дорога: перестроение, наезд на препятствие и подбор', () => {
+  const s = G.newRun(11);
+  G.act(s, { type: 'start' });
+  G.act(s, { type: 'travel', to: s.map.nodes[0].next[0], mode: 'fast' });
+  const d = s.drive;
+  d.ambushAt = -1;
+  d.objs = [{ x: 1, lane: 1, k: 'debris' }, { x: 2, lane: 0, k: 'cell' }, { x: 3, lane: 0, k: 'cam' }];
+  const r = { ...s.res };
+  assert.equal(G.act(s, { type: 'steer', dir: 2 }), false);
+  G.act(s, { type: 'tick' });
+  assert.equal(s.res.hull, r.hull - 1, 'обломки бьют по корпусу');
+  assert.equal(G.act(s, { type: 'steer', dir: -1 }), true);
+  assert.equal(G.act(s, { type: 'steer', dir: -1 }), false, 'выше верхней полосы не уехать');
+  G.act(s, { type: 'tick' });
+  assert.equal(s.res.charge, r.charge + 1, 'батарея подобрана');
+  G.act(s, { type: 'steer', dir: 1 });
+  G.act(s, { type: 'tick' });
+  assert.equal(s.res.wanted, r.wanted, 'сканер на соседней полосе не срабатывает');
+  assert.equal(d.objs.length, 1, 'объезженное остаётся на дороге, задетое и подобранное исчезает');
+});
+
+test('дорога: бой начинается посреди перегона и после него поездка продолжается', () => {
+  const s = G.newRun(12);
+  G.act(s, { type: 'start' });
+  G.act(s, { type: 'travel', to: s.map.nodes[0].next[0], mode: 'eco' });
+  const d = s.drive;
+  d.objs = []; d.ambush = ['drone']; d.ambushAt = 4;
+  for (let i = 0; i < 4; i++) G.act(s, { type: 'tick' });
+  assert.equal(s.screen, 'drive');
+  G.act(s, { type: 'tick' });
+  assert.equal(s.screen, 'battle', 'на четвёртом отрезке враги нагоняют');
+  assert.equal(d.pos, 4, 'бой не съедает отрезок пути');
+  G.act(s, { type: 'hack', target: 0 });
+  assert.equal(s.screen, 'result');
+  G.act(s, { type: 'continue' });
+  assert.equal(s.screen, 'drive', 'после боя — снова дорога');
+  for (let i = 0; i < G.TRIP_LEN - 4 + 1; i++) G.act(s, { type: 'tick' });
+  assert.notEqual(s.screen, 'drive', 'перегон закончился прибытием');
+  assert.equal(s.drive, null);
 });
 
 function battleState(types, patch) {
@@ -177,6 +237,9 @@ test('баланс: жадный бот проходит демо не всег�
     if (s.over.win) wins++; else reasons[s.over.text.slice(0, 28)] = (reasons[s.over.text.slice(0, 28)] || 0) + 1;
     crits += s.stats.crits; battles += s.stats.battles; hours += s.hour;
   }
+  let sloppy = 0;
+  for (let seed = 1; seed <= N; seed++) if (playRun(seed, greedyPolicy(mulberry(seed * 17), { sloppy: true })).s.over.win) sloppy++;
+  console.log(`  тот же бот, но невнимательный на дороге: побед ${(sloppy / N * 100).toFixed(1)} %`);
   const rate = wins / N;
   console.log(`  жадный бот: побед ${(rate * 100).toFixed(1)} %, боёв за заезд ${(battles / N).toFixed(1)}, ` +
               `критических событий ${(crits / N).toFixed(2)}, часов ${(hours / N).toFixed(1)}`);

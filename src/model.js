@@ -16,7 +16,7 @@ function newRun(seed) {
     up: { armor: 0, guns: 0, deck: 0, battery: 0 },
     map: null, at: 0, drive: null, battle: null, event: null, result: null, park: null,
     usedEvents: [], usedHitch: [], over: null, fx: [],
-    stats: { nodes: 0, battles: 0, wins: 0, escapes: 0, crits: 0 },
+    stats: { nodes: 0, battles: 0, wins: 0, escapes: 0, crits: 0, hits: 0, picks: 0 },
   };
   genMap(s);
   ['case', 'kit', 'cell', 'food'].forEach(id => addItem(s, id));
@@ -169,37 +169,98 @@ function resolveCrit(s, lines) {
   return z.length > 0;
 }
 
+// then — куда вернуться после экрана итога; посреди перегона это всегда дорога.
 function finish(s, title, lines, before, then) {
   resolveCrit(s, lines);
-  s.result = { title, lines, deltas: diff(before, s), then: s.over ? 'end' : then };
+  s.result = { title, lines, deltas: diff(before, s), then: s.over ? 'end' : s.drive ? 'drive' : then };
   s.screen = 'result';
 }
 
 // ---------- дорога ----------
 
+// Шанс засады по дороге в узел. Интерфейс показывает его до выезда.
+function ambushChance(s, n, mode) {
+  if (n.type === 'gate' || n.type === 'start') return 0;
+  if (n.type === 'road') return 1;
+  return MODES[mode].ambush + (s.res.wanted >= 5 ? 0.25 : 0);
+}
+
+// Раскладка перегона: в каждом столбце хотя бы одна полоса свободна,
+// после столбца с двумя препятствиями идёт пустой.
+function genRoad(s, mode) {
+  const objs = [];
+  let rest = false;
+  for (let x = 3; x < TRIP_LEN - 1; x++) {
+    if (rest) { rest = false; continue; }
+    const lanes = [0, 1, 2];
+    const pull = () => lanes.splice(rngInt(s, lanes.length), 1)[0];
+    if (rngNext(s) < 0.5) {
+      const two = rngNext(s) < 0.3;
+      for (let k = 0; k < (two ? 2 : 1); k++) {
+        objs.push({ x, lane: pull(), k: mode !== 'quiet' && rngNext(s) < 0.25 ? 'cam' : 'debris' });
+      }
+      rest = two;
+    }
+    if (rngNext(s) < 0.2) objs.push({ x, lane: pull(), k: rngNext(s) < 0.3 ? 'cell' : 'chip' });
+  }
+  return objs;
+}
+
 function travel(s, to, mode) {
   const cur = s.map.nodes[s.at], M = MODES[mode];
   if (!M || !cur.next.includes(to)) return false;
-  const before = snap(s);
+  const before = snap(s), n = s.map.nodes[to], chance = ambushChance(s, n, mode);
   gain(s, 'charge', -M.charge);
   s.hour += M.hours;
   if (M.wanted) gain(s, 'wanted', M.wanted);
   const dawn = s.hour > DAWN;
   if (dawn) gain(s, 'focus', -2);
   s.at = to;
-  s.drive = { mode, dawn, before };
+  const d = s.drive = { mode, dawn, len: TRIP_LEN, pos: 0, lane: 1, objs: genRoad(s, mode), ambushAt: -1, ambush: null };
+  if (chance > 0 && rngNext(s) < chance) {
+    const tier = n.col <= 2 ? 0 : n.col <= 4 ? 1 : 2;
+    d.ambush = rngPick(s, GROUPS[n.type === 'road' ? tier : Math.max(0, tier - 1)]).slice();
+    d.ambushAt = 6 + rngInt(s, 6);
+  }
   s.screen = 'drive';
+  const lines = [];
+  if (dawn) lines.push('Рассвет. Город просыпается, голова тяжелеет: Фокус −2.');
+  if (resolveCrit(s, lines)) {
+    s.result = { title: 'В пути', lines, deltas: diff(before, s), then: s.over ? 'end' : 'drive' };
+    s.screen = 'result';
+  }
   return true;
 }
 
-function arrive(s) {
-  const lines = [], d = s.drive;
-  if (d.dawn) lines.push('Рассвет. Город просыпается, голова тяжелеет: Фокус −2.');
-  s.drive = null;
+// Дорога: steer перестраивает машину, tick проезжает один отрезок.
+function driveAct(s, a) {
+  const d = s.drive;
+  if (a.type === 'steer') {
+    if (a.dir !== -1 && a.dir !== 1) return false;
+    const lane = d.lane + a.dir;
+    if (lane < 0 || lane > 2) return false;
+    d.lane = lane;
+    return true;
+  }
+  if (a.type !== 'tick') return false;
+  if (d.pos === d.ambushAt) { d.ambushAt = -1; startBattle(s, d.ambush, false); return true; }   // враги нагнали
+  if (d.pos >= d.len) { s.drive = null; enterNode(s); return true; }                              // приехали
+  const before = snap(s), lines = [];
+  d.pos++;
+  for (let i = d.objs.length - 1; i >= 0; i--) {
+    const o = d.objs[i];
+    if (o.x !== d.pos || o.lane !== d.lane) continue;
+    const O = ROAD_OBJ[o.k];
+    gain(s, O.res, O.n);
+    s.stats[O.bad ? 'hits' : 'picks']++;
+    s.fx.push({ k: 'road', kind: o.k });
+    d.objs.splice(i, 1);
+  }
   if (resolveCrit(s, lines)) {
-    s.result = { title: 'В пути', lines, deltas: diff(d.before, s), then: s.over ? 'end' : 'node' };
+    s.result = { title: 'В пути', lines, deltas: diff(before, s), then: s.over ? 'end' : 'drive' };
     s.screen = 'result';
-  } else enterNode(s);
+  }
+  return true;
 }
 
 function enterNode(s) {
@@ -207,11 +268,6 @@ function enterNode(s) {
   n.seen = true;
   s.stats.nodes++;
   switch (n.type) {
-    case 'road': {
-      const tier = n.col <= 2 ? 0 : n.col <= 4 ? 1 : 2;
-      startBattle(s, rngPick(s, GROUPS[tier]), false);
-      break;
-    }
     case 'gate': startBattle(s, ['boss', 'drone'], true); break;
     case 'meet': {
       let pool = EVENTS.filter(e => !s.usedEvents.includes(e.id));
@@ -640,7 +696,7 @@ function act(s, a) {
   switch (s.screen) {
     case 'title': if (a.type === 'start') { s.screen = 'map'; return true; } return false;
     case 'map': return a.type === 'travel' ? travel(s, a.to, a.mode) : trunkAct(s, a);
-    case 'drive': if (a.type === 'arrive') { arrive(s); return true; } return false;
+    case 'drive': return driveAct(s, a);
     case 'event': return a.type === 'choose' ? chooseEvent(s, a.i) : false;
     case 'battle': return battleAct(s, a);
     case 'park': return parkAct(s, a) || trunkAct(s, a);
@@ -650,7 +706,7 @@ function act(s, a) {
       const then = s.result.then;
       s.result = null;
       if (then === 'end') s.screen = 'end';
-      else if (then === 'node') enterNode(s);
+      else if (then === 'drive') s.screen = 'drive';
       else s.screen = 'map';
       return true;
     }

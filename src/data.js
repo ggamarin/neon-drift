@@ -4,14 +4,23 @@
 const RES_NAME = { charge: 'Заряд', hull: 'Корпус', focus: 'Фокус', credits: 'Кредиты', wanted: 'Розыск' };
 
 const MODES = {
-  eco:   { name: 'Эконом', charge: 1, hours: 2, wanted: 0,  desc: 'Бережём батарею, едем медленно.' },
-  fast:  { name: 'Быстро', charge: 2, hours: 1, wanted: 0,  desc: 'Обычный темп, время дороже заряда.' },
-  quiet: { name: 'Тихо',   charge: 2, hours: 2, wanted: -1, desc: 'Переулками, мимо камер.' },
+  eco:   { name: 'Эконом', charge: 1, hours: 2, wanted: 0,  ambush: 0.25, tick: 520, desc: 'Бережём батарею, едем медленно: препятствия объезжать проще.' },
+  fast:  { name: 'Быстро', charge: 2, hours: 1, wanted: 0,  ambush: 0.25, tick: 340, desc: 'Время дороже заряда. Дорога летит навстречу быстрее.' },
+  quiet: { name: 'Тихо',   charge: 2, hours: 2, wanted: -1, ambush: 0,    tick: 460, desc: 'Переулками: без сканеров и случайных засад.' },
+};
+
+// Перегон между узлами: TRIP_LEN отрезков, на полосах лежат препятствия и подбираемое.
+const TRIP_LEN = 18;
+const ROAD_OBJ = {
+  debris: { name: 'Обломки', bad: true, res: 'hull',    n: -1 },
+  cam:    { name: 'Сканер',  bad: true, res: 'wanted',  n: 1 },
+  cell:   { name: 'Батарея', res: 'charge',  n: 1 },
+  chip:   { name: 'Чип',     res: 'credits', n: 4 },
 };
 
 const NODE_INFO = {
   start: { name: 'Гараж',      desc: 'Отсюда начинается рейс.' },
-  road:  { name: 'Дорога',     desc: 'Опасный участок. Скорее всего, бой.' },
+  road:  { name: 'Засада',     desc: 'Опасный перегон: по дороге сюда точно будет бой.' },
   meet:  { name: 'Встреча',    desc: 'Что-то происходит у обочины.' },
   hitch: { name: 'Попутчик',   desc: 'Кто-то голосует на трассе.' },
   park:  { name: 'Стоянка',    desc: 'Сон, зарядка, ремонт, разговоры.' },

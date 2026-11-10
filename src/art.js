@@ -1,6 +1,7 @@
 'use strict';
 // Пиксель-арт прототипа: палитра 32 цвета и процедурные спрайты из прямоугольников.
 // Никаких внешних картинок, поворотов и сглаживания — всё рисуется по целым пикселям.
+// Цвет несёт смысл: циан — своё, маджента — угроза, янтарь — ресурсы. Контур спрайта красится так же.
 
 const PAL = [
   '#0b0b14', '#14132a', '#1d1b3f', '#2a2456', '#3b2f73', '#55449a', '#7a68c4', '#b9aef0',   // 0–7  тёмная база
@@ -33,7 +34,8 @@ function pxLine(c, x0, y0, x1, y1, i) {
 
 // ---------- город: слои параллакса ----------
 
-const SCN_H = 230, ROAD_Y = 196, LANE_Y = 218;
+// Дорога в три полосы: LANES — линии, на которых стоят колёса (верхняя, средняя, нижняя).
+const SCN_H = 230, ROAD_Y = 178, LANES = [196, 210, 224], LANE_Y = LANES[1];
 let SCN = null;
 
 function visRand(seed) {
@@ -53,32 +55,39 @@ function makeLayer(w, h, draw) {
   return cv;
 }
 
-function neonSign(c, x, y, word, col, vertical) {
-  const dark = col === 11 ? 8 : col === 15 ? 13 : 17, lite = col === 11 ? 12 : col === 15 ? 16 : 20;
+const DARK = { 11: 8, 15: 13, 19: 17 }, MID = { 11: 9, 15: 14, 19: 18 }, LITE = { 11: 12, 15: 16, 19: 20 };
+const DIM = { 18: 17, 19: 17, 10: 8, 11: 8, 14: 13, 17: 2, 8: 2, 13: 2 };
+
+// quiet — приглушённый вариант для экранов, где фон не должен спорить с игрой.
+function neonSign(c, x, y, word, col, vertical, quiet) {
   const w = vertical ? 11 : textW(word) + 8, h = vertical ? word.length * 9 + 5 : 13;
-  dith(c, x - 2, y - 2, w + 4, h + 4, dark === 8 ? 9 : dark === 13 ? 14 : 18, 0);
-  R(c, x, y, w, h, dark);
-  outline(c, x, y, w, h, col);
-  if (vertical) [...word].forEach((ch, i) => drawText(c, ch, x + 3, y + 3 + i * 9, lite));
-  else drawText(c, word, x + 4, y + 3, lite);
+  if (!quiet) dith(c, x - 2, y - 2, w + 4, h + 4, MID[col], 0);
+  R(c, x, y, w, h, quiet ? 1 : DARK[col]);
+  outline(c, x, y, w, h, quiet ? DARK[col] : col);
+  const ink = quiet ? MID[col] : LITE[col];
+  if (vertical) [...word].forEach((ch, i) => drawText(c, ch, x + 3, y + 3 + i * 9, ink));
+  else drawText(c, word, x + 4, y + 3, ink);
 }
 
 function buildScene() {
-  const rnd = visRand(2089);
-  const ri = (a, b) => a + Math.floor(rnd() * (b - a + 1));
-  const pick = arr => arr[Math.floor(rnd() * arr.length)];
+  const tools = seed => {
+    const rnd = visRand(seed);
+    return { rnd, ri: (a, b) => a + Math.floor(rnd() * (b - a + 1)), pick: arr => arr[Math.floor(rnd() * arr.length)] };
+  };
 
   const sky = makeLayer(640, SCN_H, c => {
-    R(c, 0, 0, 640, 70, 3); dith(c, 0, 58, 640, 12, 4, 0);
-    R(c, 0, 70, 640, 62, 4); dith(c, 0, 122, 640, 10, 5, 1);
-    R(c, 0, 132, 640, 64, 5); dith(c, 0, 160, 640, 14, 14, 0);
-    R(c, 0, 174, 640, 22, 14); dith(c, 0, 186, 640, 10, 15, 1);
-    for (let i = 0; i < 40; i++) R(c, ri(0, 639), ri(0, 60), 1, 1, 6);
+    const { ri } = tools(5);
+    R(c, 0, 0, 640, 64, 3); dith(c, 0, 52, 640, 12, 4, 0);
+    R(c, 0, 64, 640, 56, 4); dith(c, 0, 110, 640, 10, 5, 1);
+    R(c, 0, 120, 640, 58, 5); dith(c, 0, 144, 640, 14, 14, 0);
+    R(c, 0, 158, 640, 20, 14); dith(c, 0, 168, 640, 10, 15, 1);
+    for (let i = 0; i < 40; i++) R(c, ri(0, 639), ri(0, 56), 1, 1, 6);
   });
 
   const far = makeLayer(640, SCN_H, c => {
+    const { rnd, ri } = tools(11);
     for (let x = 4; x < 600;) {
-      const w = ri(16, 40), h = ri(70, 150), y = ROAD_Y - h;
+      const w = ri(16, 40), h = ri(64, 140), y = ROAD_Y - h;
       R(c, x, y, w, h, 2);
       if (rnd() < 0.5) R(c, x + (w >> 1), y - ri(6, 18), 1, 18, 2);
       if (rnd() < 0.4) R(c, x + 3, y - 4, w - 6, 4, 2);
@@ -89,63 +98,77 @@ function buildScene() {
     }
     // Шпиль — цель всего рейса, виден из любого района.
     const sx = 452;
-    R(c, sx, 30, 14, 166, 2); R(c, sx + 3, 14, 8, 16, 2); R(c, sx + 6, 0, 2, 14, 2);
-    R(c, sx - 6, 96, 26, 100, 2); R(c, sx - 12, 150, 38, 46, 2);
-    for (let y = 36; y < 190; y += 9) R(c, sx + 2, y, 10, 1, 4);
-    R(c, sx + 6, 2, 2, 2, 30); R(c, sx + 3, 28, 1, 1, 15); R(c, sx + 10, 28, 1, 1, 15);
+    R(c, sx, 26, 14, 152, 2); R(c, sx + 3, 12, 8, 14, 2); R(c, sx + 6, 0, 2, 12, 2);
+    R(c, sx - 6, 88, 26, 90, 2); R(c, sx - 12, 136, 38, 42, 2);
+    for (let y = 32; y < 172; y += 9) R(c, sx + 2, y, 10, 1, 4);
+    R(c, sx + 6, 2, 2, 2, 30); R(c, sx + 3, 24, 1, 1, 15); R(c, sx + 10, 24, 1, 1, 15);
   });
 
-  const mid = makeLayer(640, SCN_H, c => {
+  const mid = quiet => makeLayer(640, SCN_H, c => {
+    const { rnd, ri, pick } = tools(22);
     for (let x = 0; x < 610;) {
-      const w = ri(34, 72), h = ri(52, 118), y = ROAD_Y - h;
+      const w = ri(34, 72), h = ri(48, 108), y = ROAD_Y - h;
       R(c, x, y, w, h, 1);
       R(c, x, y, w, 1, 3);
-      if (rnd() < 0.6) { const tx = x + ri(4, w - 14); R(c, tx, y - 6, 9, 6, 1); R(c, tx + 4, y - 14, 1, 8, 1); }
+      const tank = rnd() < 0.6, tx = x + ri(4, w - 14);
+      if (tank) { R(c, tx, y - 6, 9, 6, 1); R(c, tx + 4, y - 14, 1, 8, 1); }
       for (let wy = y + 6; wy < ROAD_Y - 8; wy += 7) for (let wx = x + 4; wx < x + w - 5; wx += 6) {
-        if (rnd() < 0.3) R(c, wx, wy, 3, 4, pick([18, 18, 18, 10, 14, 19, 11]));
-        else if (rnd() < 0.2) R(c, wx, wy, 3, 4, 2);
+        const a = rnd(), b = rnd(), col = pick([18, 18, 18, 10, 14, 19, 11]);
+        if (a < 0.3) { if (!quiet || ((wx + wy) & 1)) R(c, wx, wy, 3, 4, quiet ? DIM[col] : col); }
+        else if (b < 0.2) R(c, wx, wy, 3, 4, 2);
       }
-      if (rnd() < 0.5 && w > 44) neonSign(c, x + ri(4, w - 40), y + ri(10, 30), pick(['ОТЕЛЬ', 'ЧИПЫ', 'ЗАЙМ', 'КИБЕР', 'ДОКИ']), pick([11, 15, 19]), false);
+      const sign = rnd() < 0.5, sgx = x + ri(4, Math.max(5, w - 40)), sgy = y + ri(10, 30);
+      const word = pick(['ОТЕЛЬ', 'ЧИПЫ', 'ЗАЙМ', 'КИБЕР', 'ДОКИ']), col = pick([11, 15, 19]);
+      if (sign && w > 44) neonSign(c, sgx, sgy, word, col, false, quiet);
       x += w + ri(0, 10);
     }
   });
 
-  const near = makeLayer(640, SCN_H, c => {
+  const near = quiet => makeLayer(640, SCN_H, c => {
+    const { rnd, ri, pick } = tools(33);
     for (let x = -6; x < 600;) {
-      const w = ri(60, 120), h = ri(34, 86), y = ROAD_Y - h;
+      const w = ri(60, 120), h = ri(30, 76), y = ROAD_Y - h;
       R(c, x, y, w, h, 0);
       R(c, x, y, w, 1, 2);
-      const col = pick([11, 15, 19]), dark = col === 11 ? 8 : col === 15 ? 13 : 17;
+      const col = pick([11, 15, 19]);
       // витрина первого этажа
-      R(c, x + 4, ROAD_Y - 22, w - 8, 16, dark);
-      R(c, x + 4, ROAD_Y - 23, w - 8, 1, col);
-      for (let wx = x + 8; wx < x + w - 12; wx += 14) { R(c, wx, ROAD_Y - 19, 9, 11, col === 11 ? 9 : col === 15 ? 14 : 18); R(c, wx + 4, ROAD_Y - 19, 1, 11, dark); }
-      for (let wy = y + 7; wy < ROAD_Y - 32; wy += 9) for (let wx = x + 6; wx < x + w - 8; wx += 9) {
-        if (rnd() < 0.22) R(c, wx, wy, 4, 5, pick([17, 17, 8, 13, 18]));
+      R(c, x + 4, ROAD_Y - 22, w - 8, 16, quiet ? 1 : DARK[col]);
+      R(c, x + 4, ROAD_Y - 23, w - 8, 1, quiet ? DARK[col] : col);
+      for (let wx = x + 8; wx < x + w - 12; wx += 14) {
+        R(c, wx, ROAD_Y - 19, 9, 11, quiet ? DARK[col] : MID[col]);
+        R(c, wx + 4, ROAD_Y - 19, 1, 11, quiet ? 1 : DARK[col]);
       }
-      if (h > 50) neonSign(c, x + ri(6, w - 20), y + 6, pick(['ЛАПША', 'БАР', 'РЕМОНТ', 'ТИР', 'ЧАЙ']), col, true);
-      else neonSign(c, x + ri(6, Math.max(7, w - 52)), y - 15, pick(['ЛАПША', 'БАР 24', 'РЕМОНТ', 'ТАКСИ']), col, false);
+      for (let wy = y + 7; wy < ROAD_Y - 32; wy += 9) for (let wx = x + 6; wx < x + w - 8; wx += 9) {
+        const a = rnd(), wc = pick([17, 17, 8, 13, 18]);
+        if (a < 0.22) R(c, wx, wy, 4, 5, quiet ? DIM[wc] : wc);
+      }
+      // вертикальная вывеска — только если целиком помещается над витриной, иначе горизонтальная над крышей
+      const word = pick(['ЛАПША', 'БАР', 'РЕМОНТ', 'ТИР', 'ЧАЙ', 'ТАКСИ']), sx = x + ri(6, w - 20), sx2 = x + ri(6, Math.max(7, w - 52));
+      if (h >= word.length * 9 + 39) neonSign(c, sx, y + 6, word, col, true, quiet);
+      else neonSign(c, sx2, y - 15, word, col, false, quiet);
       x += w + ri(10, 46);
     }
   });
 
+  // Дорога: отбойник, три полосы с пунктирной разметкой, тусклые отражения вывесок.
   const road = makeLayer(640, SCN_H - ROAD_Y + 6, c => {
+    const { ri, pick } = tools(44);
     R(c, 0, 2, 640, 1, 24); R(c, 0, 3, 640, 1, 22);
     for (let x = 0; x < 640; x += 16) R(c, x, 2, 1, 5, 22);
-    R(c, 0, 6, 640, 34, 21); R(c, 0, 6, 640, 1, 23); R(c, 0, 34, 640, 6, 0);
-    for (let i = 0; i < 34; i++) { const x = ri(0, 630), w = ri(2, 7); dith(c, x, 8, w, ri(6, 22), pick([14, 10, 18, 4]), x & 1); }
-    for (let x = 0; x < 640; x += 40) R(c, x, 30, 16, 1, 24);
-    for (let i = 0; i < 26; i++) R(c, ri(0, 630), ri(10, 32), ri(3, 9), 1, 22);
+    R(c, 0, 6, 640, 52, 21); R(c, 0, 6, 640, 1, 23); R(c, 0, 56, 640, 2, 0);
+    for (let i = 0; i < 26; i++) { const x = ri(0, 630); dith(c, x, 8, ri(2, 6), ri(5, 14), pick([13, 8, 17, 2]), x & 1); }
+    for (let i = 0; i < 22; i++) R(c, ri(0, 630), ri(10, 54), ri(3, 9), 1, 22);
+    for (let x = 0; x < 640; x += 40) { R(c, x, 29, 16, 1, 24); R(c, x + 20, 43, 16, 1, 24); }
   });
 
   const fg = makeLayer(640, SCN_H, c => {
     [90, 410].forEach(x => {
-      R(c, x, 70, 3, 160, 0); R(c, x - 16, 70, 18, 2, 0); R(c, x - 18, 72, 6, 2, 20);
-      dith(c, x - 22, 74, 14, 6, 19, 0); dith(c, x - 24, 80, 18, 8, 18, 1);
+      R(c, x, 60, 3, 170, 0); R(c, x - 16, 60, 18, 2, 0); R(c, x - 18, 62, 6, 2, 20);
+      dith(c, x - 22, 64, 14, 6, 19, 0); dith(c, x - 24, 70, 18, 8, 18, 1);
     });
   });
 
-  SCN = { sky, far, mid, near, road, fg };
+  SCN = { sky, far, road, fg, mid: mid(false), near: near(false), midQ: mid(true), nearQ: near(true) };
 }
 
 function tileLayer(c, img, sx, y) {
@@ -155,15 +178,15 @@ function tileLayer(c, img, sx, y) {
 }
 
 // Рисует город в полосе [top, top+h): низ сцены прижат к низу полосы.
-function drawScene(c, top, h, scroll) {
+function drawScene(c, top, h, scroll, quiet) {
   const off = top + h - SCN_H;
   c.save();
   c.beginPath(); c.rect(0, top, 640, h); c.clip();
   if (off > top) R(c, 0, top, 640, off - top, 3);
   c.drawImage(SCN.sky, 0, off);
   tileLayer(c, SCN.far, scroll * 0.06, off);
-  tileLayer(c, SCN.mid, scroll * 0.22, off);
-  tileLayer(c, SCN.near, scroll * 0.5, off);
+  tileLayer(c, quiet ? SCN.midQ : SCN.mid, scroll * 0.22, off);
+  tileLayer(c, quiet ? SCN.nearQ : SCN.near, scroll * 0.5, off);
   tileLayer(c, SCN.road, scroll, off + ROAD_Y - 6);
   c.restore();
   return off;
@@ -176,16 +199,35 @@ function drawForeground(c, top, h, scroll) {
   c.restore();
 }
 
-function drawRain(c, top, h, t) {
+function drawRain(c, top, h, t, thin) {
   const f = Math.floor(t / 40);
-  for (let i = 0; i < 70; i++) {
+  for (let i = 0; i < 70; i += thin ? 3 : 1) {
     const x = (i * 97 + f * (3 + (i % 3))) % 660 - 10, y = (i * 53 + f * (9 + (i % 5))) % h;
     R(c, 640 - x, top + y, 1, 3, 6);
     if (y + 5 < h) R(c, 639 - x, top + y + 3, 1, 2, 5);
   }
 }
 
-// ---------- транспорт ----------
+// ---------- спрайты с цветным контуром ----------
+
+// Спрайт рисуется один раз во внеэкранный холст, обводится контуром в 1 пиксель и кешируется.
+const SPR_CACHE = {};
+function rimmed(key, w, h, pad, rim, draw) {
+  let s = SPR_CACHE[key];
+  if (s) return s;
+  s = document.createElement('canvas');
+  s.width = w + 2; s.height = h + pad + 2;
+  const g = s.getContext('2d');
+  draw(g, 1, h + pad + 1);
+  const d = g.getImageData(0, 0, s.width, s.height).data, W2 = s.width, H2 = s.height;
+  const on = (x, y) => x >= 0 && y >= 0 && x < W2 && y < H2 && d[(y * W2 + x) * 4 + 3] > 0;
+  g.fillStyle = PAL[rim];
+  for (let y = 0; y < H2; y++) for (let x = 0; x < W2; x++) {
+    if (!on(x, y) && (on(x - 1, y) || on(x + 1, y) || on(x, y - 1) || on(x, y + 1))) g.fillRect(x, y, 1, 1);
+  }
+  SPR_CACHE[key] = s;
+  return s;
+}
 
 function wheel(c, x, y, f, d) {
   const e = d - 3;
@@ -195,47 +237,52 @@ function wheel(c, x, y, f, d) {
   R(c, x + (d >> 1) - 1, y + (d >> 1) - 1, 2, 2, 25);
 }
 
-// Машина игрока: старый седан с батареей на багажнике. x — левый край, y — линия дороги.
-function sprCar(c, x, y, f, moving) {
+function rawCar(c, x, y, f, moving) {
   const o = y - 32 - (moving && (f & 2) ? 1 : 0), P = (dx, dy, w, h, i) => R(c, x + dx, o + dy, w, h, i);
-  P(3, 15, 90, 11, 9); P(3, 23, 90, 3, 8); P(4, 15, 88, 1, 10);
-  P(1, 21, 3, 3, 23); P(92, 21, 3, 3, 23);
-  P(26, 6, 34, 9, 9); P(27, 6, 32, 1, 10);
-  P(23, 9, 3, 6, 9); P(21, 12, 2, 3, 9);
-  P(60, 8, 2, 7, 9); P(62, 10, 2, 5, 9); P(64, 12, 2, 3, 9);
-  P(62, 14, 31, 1, 10);
-  P(28, 8, 14, 6, 1); P(44, 8, 14, 6, 1); P(30, 9, 4, 1, 10); P(46, 9, 4, 1, 10);
+  P(3, 15, 90, 11, 10); P(3, 23, 90, 3, 9); P(4, 15, 88, 1, 11);
+  P(1, 21, 3, 3, 24); P(92, 21, 3, 3, 24);
+  P(26, 6, 34, 9, 10); P(27, 6, 32, 1, 11);
+  P(23, 9, 3, 6, 10); P(21, 12, 2, 3, 10);
+  P(60, 8, 2, 7, 10); P(62, 10, 2, 5, 10); P(64, 12, 2, 3, 10);
+  P(62, 14, 31, 1, 11);
+  P(28, 8, 14, 6, 1); P(44, 8, 14, 6, 1); P(30, 9, 4, 1, 9); P(46, 9, 4, 1, 9);
   P(59, 9, 2, 5, 8); P(61, 11, 2, 3, 8);
-  P(43, 15, 1, 9, 8); P(47, 17, 4, 1, 8);
-  P(3, 19, 90, 1, 11);
+  P(43, 15, 1, 9, 9); P(47, 17, 4, 1, 9);
+  P(3, 19, 90, 1, 12);
   P(92, 16, 2, 3, 20); P(2, 16, 2, 3, 15);
   P(12, 19, 16, 7, 8); P(66, 19, 16, 7, 8);
-  P(6, 10, 15, 5, 21); P(6, 10, 15, 1, 23);
+  P(6, 10, 15, 5, 22); P(6, 10, 15, 1, 24);
   P(8, 12, 1, 1, 11); P(11, 12, 1, 1, 11); P(14, 12, 1, 1, f & 2 ? 12 : 9); P(17, 12, 1, 1, 15);
   P(21, 13, 3, 1, 0);
-  P(30, 4, 26, 1, 23); P(31, 5, 1, 1, 22); P(54, 5, 1, 1, 22);
+  P(30, 4, 26, 1, 24); P(31, 5, 1, 1, 23); P(54, 5, 1, 1, 23);
   P(34, 1, 9, 3, 18); P(34, 1, 9, 1, 19); P(45, 2, 7, 2, 14); P(45, 2, 7, 1, 15);
   wheel(c, x + 14, y - 12, moving ? f : 0, 12); wheel(c, x + 68, y - 12, moving ? f : 0, 12);
+}
+
+// Машина игрока: старый седан с батареей на багажнике. x — левый край, y — линия полосы.
+function sprCar(c, x, y, f, moving) {
+  const ph = f & 3;
+  c.drawImage(rimmed('car' + ph + (moving ? 'm' : 's'), 96, 33, 0, 12, (g, ox, oy) => rawCar(g, ox, oy, ph, moving)), x - 1, y - 34);
   // свет фар дизерингом
   c.fillStyle = PAL[19];
-  for (let dx = 0; dx < 38; dx += 1) {
+  for (let dx = 0; dx < 38; dx++) {
     const hh = 1 + (dx >> 3);
-    for (let dy = -hh; dy <= hh; dy++) if ((dx + dy) & 1 && dx % 3 !== 0) c.fillRect(x + 95 + dx, o + 17 + dy, 1, 1);
+    for (let dy = -hh; dy <= hh; dy++) if ((dx + dy) & 1 && dx % 3 !== 0) c.fillRect(x + 96 + dx, y - 15 + dy, 1, 1);
   }
 }
 
 // Размеры спрайтов врагов: [ширина, высота].
 const SPR_SIZE = { biker: [34, 26], patrol: [68, 26], drone: [24, 16], jammer: [66, 34], swarm: [28, 20], boss: [92, 40] };
 
-function sprEnemy(c, type, x, y, f, e) {
-  const [w, h] = SPR_SIZE[type], o = y - h, P = (dx, dy, pw, ph, i) => R(c, x + dx, o + dy, pw, ph, i);
+function rawEnemy(c, type, x, y, f, hp) {
+  const h = SPR_SIZE[type][1], o = y - h, P = (dx, dy, pw, ph, i) => R(c, x + dx, o + dy, pw, ph, i);
   switch (type) {
     case 'biker':
       wheel(c, x + 1, y - 10, f, 10); wheel(c, x + 23, y - 10, f, 10);
-      P(8, 17, 16, 2, 22); P(11, 14, 8, 6, 21); P(13, 11, 9, 3, 14); P(6, 12, 8, 2, 0);
-      P(25, 9, 2, 10, 23); P(23, 8, 4, 1, 24); P(27, 11, 2, 2, 20); P(4, 13, 2, 1, 30);
-      P(12, 4, 6, 8, 14); P(12, 4, 6, 1, 15); P(17, 6, 7, 2, 14); P(23, 7, 2, 2, 31);
-      P(13, 0, 6, 5, 0); P(16, 2, 3, 2, 15); P(10, 11, 4, 6, 13); P(12, 17, 4, 2, 0);
+      P(8, 17, 16, 2, 24); P(11, 14, 8, 6, 23); P(13, 11, 9, 3, 15); P(6, 12, 8, 2, 22);
+      P(25, 9, 2, 10, 24); P(23, 8, 4, 1, 25); P(27, 11, 2, 2, 20); P(4, 13, 2, 1, 30);
+      P(12, 4, 6, 8, 15); P(12, 4, 6, 1, 16); P(17, 6, 7, 2, 15); P(23, 7, 2, 2, 31);
+      P(13, 0, 6, 5, 22); P(16, 2, 3, 2, 16); P(10, 11, 4, 6, 14); P(12, 17, 4, 2, 22);
       break;
     case 'patrol':
       P(2, 10, 64, 10, 25); P(2, 17, 64, 3, 23); P(2, 14, 64, 2, 4);
@@ -247,27 +294,27 @@ function sprEnemy(c, type, x, y, f, e) {
       wheel(c, x + 10, y - 12, f, 12); wheel(c, x + 48, y - 12, f, 12);
       break;
     case 'drone':
-      P(f & 1 ? 0 : 2, 1, f & 1 ? 8 : 4, 1, 24); P(f & 1 ? 16 : 18, 1, f & 1 ? 8 : 4, 1, 24);
-      P(3, 2, 2, 3, 22); P(19, 2, 2, 3, 22);
-      P(4, 5, 16, 7, 22); P(5, 4, 14, 1, 23); P(4, 11, 16, 1, 21);
-      P(8, 7, 8, 3, 0); P(9 + (f % 4), 8, 3, 1, 19);
-      P(6, 12, 2, 3, 23); P(16, 12, 2, 3, 23); P(5, 15, 2, 1, 23); P(17, 15, 2, 1, 23);
+      P(f & 1 ? 0 : 2, 1, f & 1 ? 8 : 4, 1, 25); P(f & 1 ? 16 : 18, 1, f & 1 ? 8 : 4, 1, 25);
+      P(3, 2, 2, 3, 23); P(19, 2, 2, 3, 23);
+      P(4, 5, 16, 7, 24); P(5, 4, 14, 1, 25); P(4, 11, 16, 1, 23);
+      P(8, 7, 8, 3, 0); P(9 + f, 8, 3, 1, 19);
+      P(6, 12, 2, 3, 24); P(16, 12, 2, 3, 24); P(5, 15, 2, 1, 24); P(17, 15, 2, 1, 24);
       break;
     case 'jammer':
       P(2, 6, 46, 22, 5); P(2, 6, 46, 1, 7); P(2, 27, 62, 1, 3);
       P(48, 12, 16, 16, 5); P(48, 12, 16, 1, 7); P(54, 14, 9, 6, 8); P(56, 15, 4, 1, 10);
       P(64, 24, 2, 3, 24); P(62, 21, 2, 2, 20); P(2, 20, 62, 2, 15);
-      P(10, 10, 1, 6, 15); P(13, 9, 1, 8, 15); P(16, 10, 1, 6, 15); P(24, 10, 14, 7, 2); P(26, 12, 10, 1, 15); P(26, 14, 6, 1, 14);
-      P(18, 2, 14, 2, 24); P(22, 4, 6, 1, 23); P(24, 5, 2, 1, 22); P(24, 0, 2, 2, 24);
+      P(10, 10, 1, 6, 16); P(13, 9, 1, 8, 16); P(16, 10, 1, 6, 16); P(24, 10, 14, 7, 2); P(26, 12, 10, 1, 15); P(26, 14, 6, 1, 14);
+      P(18, 2, 14, 2, 25); P(22, 4, 6, 1, 24); P(24, 5, 2, 1, 23); P(24, 0, 2, 2, 25);
       if (f & 2) { dith(c, x + 12, o - 4, 26, 2, 15, 0); dith(c, x + 16, o - 8, 18, 2, 14, 1); }
       P(7, 21, 16, 7, 1); P(44, 21, 16, 7, 1);
       wheel(c, x + 9, y - 12, f, 12); wheel(c, x + 46, y - 12, f, 12);
       break;
     case 'swarm': {
-      const ox = [0, 12, 22, 5, 16], oy = [5, 0, 7, 14, 12], n = e ? e.hp : 5;
-      for (let k = 0; k < n; k++) {
+      const ox = [0, 12, 22, 5, 16], oy = [5, 0, 7, 14, 12];
+      for (let k = 0; k < hp; k++) {
         const px = x + ox[k], py = o + oy[k] + ((f + k) & 1);
-        R(c, px - 1, py - 1, 7, 1, (f + k) & 1 ? 24 : 23); R(c, px, py, 5, 3, 22); R(c, px + 2, py + 1, 1, 1, 15);
+        R(c, px - 1, py - 1, 7, 1, (f + k) & 1 ? 25 : 24); R(c, px, py, 5, 3, 24); R(c, px + 2, py + 1, 1, 1, 15);
       }
       break;
     }
@@ -282,7 +329,41 @@ function sprEnemy(c, type, x, y, f, e) {
       wheel(c, x + 7, y - 12, f, 12); wheel(c, x + 29, y - 12, f, 12); wheel(c, x + 69, y - 12, f, 12);
       break;
   }
+}
+
+// Враг: x — левый край, y — низ спрайта. Контур мадженты — «это угроза».
+function sprEnemy(c, type, x, y, f, e) {
+  const [w, h] = SPR_SIZE[type], ph = f & 3, hp = e ? e.hp : 5, pad = type === 'jammer' ? 8 : 0;
+  const key = type + ph + (type === 'swarm' ? 'x' + hp : '');
+  c.drawImage(rimmed(key, w, h, pad, 15, (g, ox, oy) => rawEnemy(g, type, ox, oy, ph, hp)), x - 1, y - h - pad - 1);
   return [w, h];
+}
+
+// То, что лежит на полосах. x — центр, y — линия полосы. Плохое — маджента, полезное — циан и янтарь.
+function sprObject(c, kind, x, y, f) {
+  const key = kind + (f & 1);
+  const s = rimmed(key, 24, 20, 0, kind === 'cell' ? 12 : kind === 'chip' ? 20 : 16, (g, ox, oy) => {
+    const P = (dx, dy, w, h, i) => R(g, ox + dx, oy - 20 + dy, w, h, i);
+    if (kind === 'debris') {
+      P(1, 7, 22, 9, 0); P(2, 8, 20, 7, 15);
+      for (let k = 0; k < 4; k++) P(3 + k * 5, 8, 2, 7, 0);
+      P(3, 16, 3, 4, 22); P(18, 16, 3, 4, 22); P(10, 3, 4, 4, f & 1 ? 16 : 14); P(11, 2, 2, 1, 25);
+    } else if (kind === 'cam') {
+      P(1, 6, 4, 14, 22); P(2, 7, 2, 12, 24); P(19, 6, 4, 14, 22); P(20, 7, 2, 12, 24);
+      P(0, 3, 6, 4, 0); P(18, 3, 6, 4, 0); P(2, 4, 2, 2, 30); P(20, 4, 2, 2, 30);
+      dith(g, ox + 5, oy - 12, 14, 7, 15, f & 1); R(g, ox + 5, oy - 9, 14, 1, 16);
+    } else if (kind === 'cell') {
+      const b = f & 1;
+      P(7, 5 - b, 10, 13, 22); P(8, 6 - b, 8, 11, 0); P(10, 3 - b, 4, 2, 24);
+      P(9, 7 - b, 6, 4, 11); P(9, 12 - b, 6, 4, 11); P(10, 8 - b, 2, 1, 12);
+    } else {
+      const b = f & 1;
+      P(7, 7 - b, 10, 10, 19); P(8, 8 - b, 8, 8, 17); P(10, 10 - b, 4, 4, 20);
+      P(9, 5 - b, 1, 2, 19); P(12, 5 - b, 1, 2, 19); P(15, 5 - b, 1, 2, 19);
+      P(9, 17 - b, 1, 2, 19); P(12, 17 - b, 1, 2, 19); P(15, 17 - b, 1, 2, 19);
+    }
+  });
+  c.drawImage(s, x - 13, y - 21);
 }
 
 // ---------- портреты 32×32 ----------
@@ -335,14 +416,16 @@ const ICONS = {
   shop:  ['.##......', '#..#.....', '#.##.....', '.####....', '...###...', '....###..', '.....###.', '......##.'],
   gate:  ['#########', '#.#.#.#.#', '#########', '.#.....#.', '.#.....#.', '.#.....#.', '.#.....#.', '###...###'],
   start: ['....#....', '...###...', '..#####..', '.#######.', '.##...##.', '.##...##.', '.##...##.', '.##...##.'],
-  park:  ['######...', '##...##..', '##...##..', '######...', '##.......', '##.......', '##.......', '##.......'],
+  park:  ['.######..', '.##...##.', '.##...##.', '.######..', '.##......', '.##......', '.##......', '.##......'],
   meet:  ['..####...', '.##..##..', '.....##..', '....##...', '...##....', '...##....', '.........', '...##....'],
   hidden:['.........', '.........', '.........', '.#..#..#.', '.........', '.........', '.........', '.........'],
 };
 
-function drawIcon(c, name, x, y, color) {
+// Значок 9×8, k — целочисленный масштаб.
+function drawIcon(c, name, x, y, color, k) {
+  k = k || 1;
   c.fillStyle = PAL[color];
-  ICONS[name].forEach((row, yy) => { for (let xx = 0; xx < row.length; xx++) if (row[xx] === '#') c.fillRect(x + xx, y + yy, 1, 1); });
+  ICONS[name].forEach((row, yy) => { for (let xx = 0; xx < row.length; xx++) if (row[xx] === '#') c.fillRect(x + xx * k, y + yy * k, k, k); });
 }
 
 // Значок предмета 12×12, k — целочисленный масштаб.

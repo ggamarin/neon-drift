@@ -24,7 +24,8 @@ const strip = s => { const c = JSON.parse(JSON.stringify(s)); c.fx = []; return 
   if (raw !== 'title') errors.push('index.html не запустился: ' + raw);
   console.log('index.html без сборки: экран «' + raw + '»');
   await page.setContent(`<!doctype html><html><head><meta charset="utf-8"></head><body>${html}</body></html>`, { waitUntil: 'load' });
-  await page.evaluate(() => { window.__nd.ui.muted = true; });
+  // самоход на дороге и подсказки выключены: действия подаёт только бот
+  await page.evaluate(() => { const u = window.__nd.ui; u.muted = true; u.auto = false; u.hintsOff = true; });
   const screens = {};
   for (let run = 1; run <= runs; run++) {
     const seed = 1000 + run, s = G.newRun(seed);

@@ -46,7 +46,10 @@ function candidates(s) {
       }));
       trunk();
       break;
-    case 'drive': out.push({ type: 'arrive' }); break;
+    case 'drive':
+      for (let k = 0; k < 6; k++) out.push({ type: 'tick' });
+      out.push({ type: 'steer', dir: -1 }, { type: 'steer', dir: 1 });
+      break;
     case 'event': G.eventView(s).options.forEach((o, i) => { if (o.ok) out.push({ type: 'choose', i }); }); break;
     case 'battle': return battleCandidates(s);
     case 'park':
@@ -69,7 +72,7 @@ function randomPolicy(rand) {
 }
 
 // Жадный бот: не оптимален, но играет осмысленно.
-function greedyPolicy(rand) {
+function greedyPolicy(rand, opts = {}) {
   return s => {
     const r = s.res;
     const usable = (id, k, below) => G.ITEMS[id].use && G.ITEMS[id].use[k] && r[k] <= below;
@@ -89,7 +92,17 @@ function greedyPolicy(rand) {
         const pick = next.find(id => low && ['park', 'shop', 'meet'].includes(s.map.nodes[id].type)) ?? next[Math.floor(rand() * next.length)];
         return { type: 'travel', to: pick, mode: r.wanted >= 4 && r.charge > 5 ? 'quiet' : r.charge <= 4 ? 'eco' : 'fast' };
       }
-      case 'drive': return { type: 'arrive' };
+      case 'drive': {
+        // смотрим на следующий отрезок: полоса с подбираемым и без препятствия лучше всех
+        const d = s.drive, next = d.objs.filter(o => o.x === d.pos + 1);
+        const score = lane => {
+          const o = next.find(q => q.lane === lane);
+          return (o ? (G.ROAD_OBJ[o.k].bad ? -10 : 5) : 0) - Math.abs(lane - d.lane) * (opts.sloppy ? 6 : 0.1);
+        };
+        const best = [0, 1, 2].sort((x, y) => score(y) - score(x))[0];
+        if (best !== d.lane && !(opts.sloppy && rand() < 0.35)) return { type: 'steer', dir: best < d.lane ? -1 : 1 };
+        return { type: 'tick' };
+      }
       case 'event': {
         const ok = G.eventView(s).options.map((o, i) => (o.ok ? i : -1)).filter(i => i >= 0);
         return { type: 'choose', i: ok[Math.floor(rand() * ok.length)] };

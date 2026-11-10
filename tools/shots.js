@@ -1,5 +1,5 @@
 // Дымовой прогон в настоящем браузере: node tools/shots.js [папка для скриншотов]
-// Проверяет, что страница грузится без ошибок, и снимает ключевые экраны.
+// Проверяет настоящими кликами и клавишами, что страница работает, и снимает ключевые экраны.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
@@ -11,96 +11,117 @@ const page_ = `<!doctype html><html><head><meta charset="utf-8"><meta name="view
 (async () => {
   fs.mkdirSync(out, { recursive: true });
   const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 1300, height: 760 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({ viewport: { width: 1340, height: 800 }, deviceScaleFactor: 1 });
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/fonts\.g|ERR_|Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
   await page.route('**/fonts.googleapis.com/**', r => r.abort());
   await page.setContent(page_, { waitUntil: 'load' });
-  await page.evaluate(() => { window.__nd.ui.muted = true; window.__nd.newGame(424242); });
+  const ev = (fn, arg) => page.evaluate(fn, arg);
   const cv = page.locator('#game');
   const shot = async name => { await page.waitForTimeout(350); await cv.screenshot({ path: path.join(out, name + '.png') }); };
-  const go = a => page.evaluate(a => window.__nd.go(a), a);
-  const at = async (x, y) => { const b = await cv.boundingBox(); const k = b.width / 640; await page.mouse.click(b.x + x * k, b.y + y * k); };
-  const box = await cv.boundingBox();
-  console.log('масштаб canvas: ×' + box.width / 640);
+  const at = async (x, y) => { const b = await cv.boundingBox(); const k = b.width / 640; await page.mouse.click(b.x + x * k, b.y + y * k); await page.waitForTimeout(90); };
+  const hover = async (x, y) => { const b = await cv.boundingBox(); const k = b.width / 640; await page.mouse.move(b.x + x * k, b.y + y * k); };
+  const state = () => ev(() => { const s = window.__nd.state; return { screen: s.screen, lane: s.drive && s.drive.lane, pos: s.drive && s.drive.pos }; });
+  const check = (ok, text) => { if (!ok) errors.push(text); };
+  console.log('масштаб canvas: ×' + (await cv.boundingBox()).width / 640);
 
+  // --- первый запуск: подсказки включены ---
+  await ev(() => { const u = window.__nd.ui; u.muted = true; u.hintsOff = false; u.seen = {}; window.__nd.newGame(424242); });
   await shot('01-title');
   await at(320, 337);                                   // «Начать рейс»
-  await page.waitForTimeout(100);
-  if ((await page.evaluate(() => window.__nd.state.screen)) !== 'map') errors.push('клик по «Начать рейс» не открыл карту');
-  await page.evaluate(() => { const s = window.__nd.state; window.__nd.ui.selNode = s.map.nodes[s.at].next[0]; ['hacker', 'guard'].forEach(window.__nd.debug.crew); });
-  await page.mouse.move(box.x + 500 * box.width / 640, box.y + 110 * box.width / 640);
-  await shot('02-map');
-  await page.evaluate(() => { window.__nd.debug.item('emp'); window.__nd.debug.item('scrap'); window.__nd.ui.trunk = true; window.__nd.ui.sel = { uid: 2 }; });
-  await shot('03-trunk');
-  await page.evaluate(() => { window.__nd.ui.trunk = false; });
-  await page.evaluate(() => window.__nd.debug.battle(['biker', 'patrol', 'drone', 'swarm']));
-  await page.waitForTimeout(900);
-  await shot('04-battle');
-  await page.evaluate(() => { window.__nd.ui.target = { type: 'push' }; });
-  await shot('05-battle-target');
-  await page.evaluate(() => { window.__nd.ui.target = null; window.__nd.go({ type: 'endTurn' }); });
-  await page.waitForTimeout(500);
-  await shot('06-battle-enemy-phase');
-  await page.evaluate(() => { window.__nd.debug.crew('android'); window.__nd.debug.battle(['boss', 'drone'], true); });
-  await page.waitForTimeout(900);
-  await shot('07-boss');
-  await page.evaluate(() => { const s = window.__nd.state; s.battle = null; s.event = { id: 'courier' }; s.screen = 'event'; });
-  await shot('08-event');
-  await go({ type: 'choose', i: 0 });
-  await shot('09-result');
-  await page.evaluate(() => { const s = window.__nd.state; s.result = null; s.event = { id: 'hitch', who: 'musician' }; s.screen = 'event'; });
-  await shot('10-hitch');
-  await page.evaluate(() => { const s = window.__nd.state; s.event = null; s.park = { rested: false, talked: [] }; s.screen = 'park'; });
-  await shot('11-park');
-  await page.evaluate(() => { const s = window.__nd.state; s.park = null; s.screen = 'shop'; });
-  await page.mouse.move(box.x + 100 * box.width / 640, box.y + 230 * box.width / 640);
-  await shot('12-shop');
-  await page.evaluate(() => { const s = window.__nd.state; s.over = { win: true, text: 'Броневик дымит на обочине, шлагбаум поднят. Кейс едет дальше, в Развязку.' }; s.screen = 'end'; });
-  await shot('13-end');
-
-  // настоящие клики: узел → режим → дорога → прибытие, затем кнопка боя
-  await page.evaluate(() => window.__nd.newGame(7));
-  await at(320, 337);
-  const first = await page.evaluate(() => { const s = window.__nd.state, n = s.map.nodes[s.map.nodes[s.at].next[0]]; return { x: 46 + n.col * 50, y: 74 + n.row * 54 }; });
+  check((await state()).screen === 'map', 'клик по «Начать рейс» не открыл карту');
+  await page.waitForTimeout(200);
+  check(await ev(() => window.__nd.ui.coachOn), 'на карте не появилась первая подсказка');
+  await shot('02-map-hint');
+  const first = await ev(() => { const s = window.__nd.state, n = s.map.nodes[s.map.nodes[s.at].next[0]]; return { x: 46 + n.col * 50, y: 78 + n.row * 56 }; });
   await at(first.x, first.y);
+  check((await ev(() => window.__nd.ui.selNode)) == null, 'пока открыта подсказка, карта не должна принимать клики');
+  for (let i = 0; i < 2; i++) { await page.keyboard.press('Enter'); await page.waitForTimeout(120); }   // «Понятно» ×2: ресурсы и карта
+  await at(first.x, first.y);
+  check((await ev(() => window.__nd.ui.selNode)) != null, 'клик по узлу карты не выбрал его');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Enter');                   // подсказка про режимы
+  await page.waitForTimeout(120);
+  await hover(530, 150);
+  await shot('03-map-modes');
+  await at(530, 150);                                   // режим «Быстро»
+  check((await state()).screen === 'drive', 'клик по режиму езды не начал поездку');
+  await page.waitForTimeout(250);
+  check((await state()).pos === 0, 'пока открыта подсказка, дорога должна стоять на паузе');
+  await shot('04-drive-hint');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');               // сразу следом: нажатие не должно потеряться
   await page.waitForTimeout(80);
-  if ((await page.evaluate(() => window.__nd.ui.selNode)) == null) errors.push('клик по узлу карты не выбрал его');
-  await at(530, 152);                                   // режим «Быстро»
-  await page.waitForTimeout(80);
-  if ((await page.evaluate(() => window.__nd.state.screen)) !== 'drive') errors.push('клик по режиму езды не начал поездку');
-  await page.waitForTimeout(2700);
-  const after = await page.evaluate(() => window.__nd.state.screen);
-  if (after === 'drive' || after === 'map') errors.push('поездка не закончилась прибытием: ' + after);
-  await page.evaluate(() => window.__nd.debug.battle(['biker']));
-  await page.waitForTimeout(700);
-  const hp0 = await page.evaluate(() => window.__nd.state.battle.enemies[0].hp);
-  await at(428, 276);                                   // «Стволы»: цель одна, выстрел сразу
-  await page.waitForTimeout(80);
-  const hp1 = await page.evaluate(() => window.__nd.state.battle.enemies[0].hp);
-  if (hp1 !== hp0 - 2) errors.push('клик по «Стволам» не нанёс урон: ' + hp0 + ' → ' + hp1);
-  await at(498, 345);                                   // «Конец хода»
-  await page.waitForTimeout(80);
-  if ((await page.evaluate(() => window.__nd.state.battle.turn)) !== 2) errors.push('клик по «Концу хода» не передал ход');
-  await page.waitForTimeout(1200);
+  check((await state()).lane === 2, 'нажатие сразу после закрытия подсказки потерялось');
+  await page.keyboard.press('ArrowUp');
+  await page.waitForTimeout(60);
 
-  // шрифт целиком — для проверки глифов глазами
-  await page.evaluate(() => {
-    const cv = document.getElementById('game'), s = window.__nd.state;
-    s.over = null; s.screen = 'result';
-    s.result = { title: 'Шрифт', then: 'map', deltas: [], lines: [
-      'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789',
-      '.,:;!?-–—−+×/()%«»"\'·…→←↑↓[]=<>#*_|', 'Съешь ещё этих мягких французских булок, да выпей чаю. Эй, жлоб! Где туз? Прячь юных съёмщиц в шкаф.' ] };
-  });
-  await shot('14-font');
+  // --- дорога: клавиши, клик по полосе, самоход ---
+  await ev(() => { window.__nd.ui.hintsOff = true; });
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(60);
+  check((await state()).lane === 2, 'стрелка вниз не перестроила машину');
+  await at(400, 18 + 196 - 4);                          // клик по верхней полосе
+  check((await state()).lane === 0, 'клик по верхней полосе не перестроил машину');
+  await page.keyboard.press('s');
+  await page.waitForTimeout(60);
+  check((await state()).lane === 1, 'клавиша S не перестроила машину');
+  await page.waitForTimeout(900);
+  check((await state()).pos >= 2, 'машина не едет сама');
+  await ev(() => { const u = window.__nd.ui, d = window.__nd.state.drive; u.auto = false; u.acc = 100;
+    d.ambushAt = -1; d.pos = 5; d.lane = 1;
+    d.objs = [{ x: 6, lane: 1, k: 'debris' }, { x: 7, lane: 0, k: 'cell' }, { x: 8, lane: 2, k: 'cam' }, { x: 8, lane: 1, k: 'debris' }, { x: 10, lane: 0, k: 'chip' }, { x: 11, lane: 2, k: 'debris' }, { x: 12, lane: 1, k: 'cell' }]; });
+  await shot('05-drive');
+
+  // --- засада посреди перегона и возврат на дорогу ---
+  await ev(() => { const d = window.__nd.state.drive; d.objs = []; d.ambush = ['biker']; d.ambushAt = d.pos; ['hacker', 'guard'].forEach(window.__nd.debug.crew); window.__nd.go({ type: 'tick' }); });
+  check((await state()).screen === 'battle', 'засада не началась посреди перегона');
+  await page.waitForTimeout(800);
+  const hp0 = await ev(() => window.__nd.state.battle.enemies[0].hp);
+  await at(428, 276);                                   // «Стволы»: цель одна, выстрел сразу
+  check((await ev(() => window.__nd.state.battle.enemies[0].hp)) === hp0 - 2, 'клик по «Стволам» не нанёс урон');
+  await at(498, 345);                                   // «Конец хода»
+  check((await ev(() => window.__nd.state.battle.turn)) === 2, 'клик по «Концу хода» не передал ход');
+  await page.waitForTimeout(900);
+  await ev(() => { window.__nd.state.battle.enemies[0].hp = 1; });
+  await at(428, 276);
+  check((await state()).screen === 'result', 'после победы нет экрана итога');
+  await shot('06-result-midtrip');
+  await at(320, 336);                                   // «Ехать дальше»
+  check((await state()).screen === 'drive', 'после боя поездка не продолжилась');
+
+  // --- статичные сцены для скриншотов ---
+  await ev(() => window.__nd.debug.battle(['biker', 'patrol', 'drone', 'swarm']));
+  await page.waitForTimeout(900);
+  await hover(10, 300);
+  await shot('07-battle');
+  await ev(() => { window.__nd.ui.target = { type: 'push' }; });
+  await shot('08-battle-target');
+  await ev(() => { window.__nd.ui.target = null; window.__nd.go({ type: 'endTurn' }); });
+  await page.waitForTimeout(500);
+  await shot('09-battle-enemy-phase');
+  await ev(() => { const u = window.__nd.ui; u.hintsOff = false; u.seen = {}; window.__nd.debug.battle(['jammer', 'biker']); });
+  await page.waitForTimeout(900);
+  await shot('10-battle-hint');
+  await ev(() => { window.__nd.ui.hintsOff = true; window.__nd.debug.crew('android'); window.__nd.debug.battle(['boss', 'drone'], true); });
+  await page.waitForTimeout(900);
+  await shot('11-boss');
+  await ev(() => { const s = window.__nd.state; s.battle = null; s.drive = null; s.event = { id: 'courier' }; s.screen = 'event'; });
+  await shot('12-event');
+  await ev(() => { const s = window.__nd.state; s.event = null; s.screen = 'map'; window.__nd.debug.item('emp'); window.__nd.debug.item('scrap'); window.__nd.ui.trunk = true; window.__nd.ui.sel = { uid: 2 }; });
+  await shot('13-trunk');
+  await ev(() => { const s = window.__nd.state; window.__nd.ui.trunk = false; s.screen = 'shop'; });
+  await hover(100, 230);
+  await shot('14-shop');
+  await ev(() => { const s = window.__nd.state; s.over = { win: true, text: 'Броневик дымит на обочине, шлагбаум поднят. Кейс едет дальше, в Развязку.' }; s.screen = 'end'; });
+  await shot('15-end');
 
   // узкий экран: страница не должна скроллиться вбок
   await page.setViewportSize({ width: 400, height: 800 });
   await page.waitForTimeout(200);
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-  if (overflow > 0) errors.push('горизонтальная прокрутка на 400px: ' + overflow);
-  await page.screenshot({ path: path.join(out, '15-phone.png') });
+  const overflow = await ev(() => document.documentElement.scrollWidth - window.innerWidth);
+  check(overflow <= 0, 'горизонтальная прокрутка на 400px: ' + overflow);
 
   await browser.close();
   if (errors.length) { console.log('ОШИБКИ:\n' + errors.join('\n')); process.exit(1); }
