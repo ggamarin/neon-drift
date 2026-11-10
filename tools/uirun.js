@@ -17,6 +17,12 @@ const strip = s => { const c = JSON.parse(JSON.stringify(s)); c.fx = []; return 
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.route('**/fonts.googleapis.com/**', r => r.abort());
+  // index.html без сборки: скрипты подключены по отдельности и должны завестись сами
+  await page.goto('file://' + path.join(__dirname, '..', 'index.html'));
+  await page.waitForTimeout(300);
+  const raw = await page.evaluate(() => (window.__nd ? window.__nd.state.screen : 'нет window.__nd'));
+  if (raw !== 'title') errors.push('index.html не запустился: ' + raw);
+  console.log('index.html без сборки: экран «' + raw + '»');
   await page.setContent(`<!doctype html><html><head><meta charset="utf-8"></head><body>${html}</body></html>`, { waitUntil: 'load' });
   await page.evaluate(() => { window.__nd.ui.muted = true; });
   const screens = {};
