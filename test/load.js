@@ -9,4 +9,5 @@ const src = files.map(f => fs.readFileSync(path.join(__dirname, '..', 'src', f),
 module.exports = new Function(src + `
 return { newRun, act, eventView, battleWhy, battleTargets, intentOf, nextIntent, fits, itemSize, living,
          nodeVisible, startBattle, resolveCrit, addItem, findSpot, ambushChance, genRoad, ROAD_OBJ, TRIP_LEN,
-         ITEMS, CREW, ENEMIES, EVENTS, MODES, SHOP_ITEMS, UPGRADES, TRUNK_W, TRUNK_H, DAWN, DEBT_LIMIT };`)();
+         ITEMS, CREW, ENEMIES, EVENTS, MODES, SHOP_ITEMS, UPGRADES, TRUNK_W, TRUNK_H, DAWN, DEBT_LIMIT,
+         RES_NAME, NODE_INFO, LOOT, GROUPS, HITCH_TEXT, plural };`)();
