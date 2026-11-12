@@ -6,6 +6,11 @@
 const TRUNK_W = 6, TRUNK_H = 4, DAWN = 8, DEBT_LIMIT = 100, MAX_ENEMIES = 4;
 
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+// Число с правильной формой слова: plural(3, 'ход', 'хода', 'ходов') → «3 хода».
+function plural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  return n + ' ' + (a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many);
+}
 
 function newRun(seed) {
   const s = {
@@ -144,7 +149,7 @@ function resolveCrit(s, lines) {
   if (r.focus <= 0) z.push('focus');
   if (z.length >= 2) {
     lines.push('Сразу два ресурса в нуле. Дальше ехать не на чем и некому.');
-    lose(s, 'Машина и водитель сдали одновременно. Кейс достанется тем, кто найдёт вас первым.');
+    lose(s, 'Машина и водитель сдали одновременно. Кейс достанется тем, кто найдёт тебя первым.');
     return true;
   }
   if (z[0] === 'charge') {
@@ -435,7 +440,7 @@ function battleWhy(s, a) {
       if (!c) return 'Нет попутчика';
       const C = CREW[c.id];
       if (c.id === 'musician') { if (c.used) return 'Уже сыграно в этом бою'; }
-      else if (c.cd > 0) return 'Откат: ещё ' + c.cd + ' х.';
+      else if (c.cd > 0) return 'Откат: ещё ' + plural(c.cd, 'ход', 'хода', 'ходов');
       if (b.ap < C.ap) return 'Нужно ' + C.ap + ' ОД';
       if (c.id === 'hacker') return jam ? 'Глушилка блокирует взлом' : tgt(e => ENEMIES[e.type].tech ? '' : 'Только по технике');
       if (c.id === 'android') return tgt(() => '');
@@ -469,7 +474,7 @@ function hit(s, i, n, kind) {
   n = Math.min(n, e.hp);
   e.hp -= n;
   s.fx.push({ k: 'dmg', i, n });
-  blog(s, E.name + ': −' + n + (e.hp === 0 ? ', выведены из строя' : ''));
+  blog(s, E.name + ': −' + n + (e.hp === 0 ? ', цель выведена из строя' : ''));
 }
 
 function battleAct(s, a) {
@@ -596,7 +601,7 @@ function endBattle(s, outcome) {
     if (b.boss) {
       lines.push('Броневик прижал машину к отбойнику.');
       lose(s, 'КПП не пройден. Кейс конфискован, рейс окончен.');
-    } else lines.push('Вас выбили с трассы.');
+    } else lines.push('Тебя выбили с трассы.');
   }
   s.battle = null;
   finish(s, title, lines, b.before, 'map');

@@ -287,9 +287,9 @@ function scMap() {
     if (sel) rc(x - 12, y - 12, 24, 24, 26), rc(x - 11, y - 11, 22, 22, fill);
     drawIcon(c, type, x - 9, y - 8, ic, 2);
     if (reach) label(NODE_INFO[type].name, x, y + 18, sel ? 26 : 12);
-    if (isCur) label('ВЫ ЗДЕСЬ', x, y + 18, 7);
+    if (isCur) label('ТЫ ЗДЕСЬ', x, y + 18, 7);
     if (hot) {
-      ui.tip = NODE_INFO[type].name + '. ' + NODE_INFO[type].desc + (reach ? '' : isCur ? ' Вы здесь.' : ' Отсюда не доехать.');
+      ui.tip = NODE_INFO[type].name + '. ' + NODE_INFO[type].desc + (reach ? '' : isCur ? ' Ты здесь.' : ' Отсюда не доехать.');
       if (reach && ui.click) { ui.selNode = n.id; ui.click = false; sfx('click'); }
     }
   });
@@ -506,7 +506,7 @@ function scBattle() {
   let sy = 50;
   if (b.shield > 0) { rc(2, sy - 2, 104, 11, 0); tx('ЩИТ ' + b.shield, 6, sy, 12); sy += 12; }
   if (b.escape > 0) { rc(2, sy - 2, 104, 11, 0); tx('ОТРЫВ ' + b.escape + ' %', 6, sy, 28); sy += 12; }
-  if (!b.boss) { rc(2, sy - 2, 104, 11, 0); tx('патруль через ' + (6 - b.heat) + ' х.', 6, sy, 7); }
+  if (!b.boss) { rc(2, sy - 2, 104, 11, 0); tx('патруль через ' + plural(6 - b.heat, 'ход', 'хода', 'ходов'), 6, sy, 7); }
 
   rc(0, PANEL_Y, W, H - PANEL_Y, 0); rc(0, PANEL_Y, W, 1, 4);
   const busy = ui.t < ui.lockUntil;
