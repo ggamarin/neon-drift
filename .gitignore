@@ -1,3 +1,4 @@
 dist/
 shots/
 node_modules/
+build/

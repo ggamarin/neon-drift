@@ -25,6 +25,7 @@
 | Где лежит | `index.html`, `src/` | `godot/` |
 | Играть онлайн | https://ggamarin.github.io/neon-drift/ | https://ggamarin.github.io/neon-drift/godot-web/ |
 | Графика | Пиксель-арт 640×360 | Векторная 1280×720: сглаживание, градиенты, свечение, дождь частицами |
+| Звук | Короткие сигналы | Эффекты, мотор, дождь и музыка — всё синтезом в коде |
 | Логика | `src/model.js` | `godot/scripts/model.gd` — порт один в один |
 
 Контент общий: `godot/scripts/data.gd` генерируется из `src/data.js`, поэтому тексты и числа правятся в одном месте.
@@ -70,7 +71,21 @@ node tools/gen-godot.js
 godot --headless --path godot --export-release "Web" ../godot-web/index.html
 ```
 
-Ограничения демо: звука нет; интерфейс рисуется кодом из `godot/main.gd`, а не собран сценами в редакторе.
+Сборка под Windows — один файл `build/NeonDrift.exe` со вшитым игровым пакетом (папка `build/` в репозиторий не входит):
+
+```bash
+godot --headless --path godot --export-release "Windows Desktop" ../build/NeonDrift.exe
+```
+
+Звук синтезируется кодом при запуске (`godot/scripts/audio.gd`), звуковых файлов в проекте нет: эффекты, гул мотора,
+шум дождя и музыкальная петля; ударные вступают в бою. Выключается кнопкой «Звук» на стартовом экране.
+Выгрузить всё синтезированное в WAV для проверки:
+
+```bash
+godot --path . -- --audio-dump=/tmp/neon-drift-audio
+```
+
+Ограничение демо: интерфейс рисуется кодом из `godot/main.gd`, а не собран сценами в редакторе.
 
 ## Запуск JS-прототипа
 

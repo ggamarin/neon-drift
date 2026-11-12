@@ -3,6 +3,7 @@ extends Node2D
 #   scripts/model.gd — логика (порт JS-прототипа, проверен эталонными заездами),
 #   scripts/data.gd  — контент (генерируется из src/data.js),
 #   scripts/art.gd   — графика (полигоны, градиенты, свечение),
+#   scripts/audio.gd — звук (синтезируется кодом при запуске),
 #   main.gd          — экраны, ввод, подсказки.
 # Интерфейс — immediate-mode: каждый кадр экран рисуется заново из состояния S,
 # все изменения идут через go(action).
@@ -10,6 +11,7 @@ extends Node2D
 const M = preload("res://scripts/model.gd")
 const D = preload("res://scripts/data.gd")
 const A = preload("res://scripts/art.gd")
+const Audio = preload("res://scripts/audio.gd")
 
 const W = 1280.0
 const H = 720.0
@@ -40,6 +42,7 @@ var layers: Array = []        # [{a, b, speed, quiet}] — пары тайлов
 var world: Canvas
 var hud: Canvas
 var rain: CPUParticles2D
+var audio: Node
 
 var t := 0.0
 var dt := 0.016
@@ -89,11 +92,15 @@ func _ready() -> void:
 	world = _canvas(_paint_world)
 	_make_rain()
 	hud = _canvas(_paint_hud)
+	audio = Audio.new()
+	add_child(audio)
 	_load_prefs()
+	get_tree().set_auto_accept_quit(false)   # выходим сами: сначала глушим звук
 	new_game(-1)
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--tour="): _run_tour(arg.trim_prefix("--tour="))
 		elif arg == "--replay": _run_replay()
+		elif arg.begins_with("--audio-dump="): _run_audio_dump(arg.trim_prefix("--audio-dump="))
 
 func _canvas(painter: Callable) -> Canvas:
 	var c = Canvas.new()
@@ -142,12 +149,23 @@ func _load_prefs() -> void:
 	if cf.load("user://neon-drift.cfg") == OK:
 		seen = cf.get_value("hints", "seen", {})
 		hints_off = cf.get_value("hints", "off", false)
+		audio.muted = cf.get_value("audio", "muted", false)
 
 func _save_prefs() -> void:
 	var cf = ConfigFile.new()
 	cf.set_value("hints", "seen", seen)
 	cf.set_value("hints", "off", hints_off)
+	cf.set_value("audio", "muted", audio.muted)
 	cf.save("user://neon-drift.cfg")
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST: _quit(0)
+
+func _quit(code: int) -> void:
+	audio.stop_all()
+	set_process(false)
+	for i in 4: await get_tree().process_frame
+	get_tree().quit(code)
 
 # ---------- кадр ----------
 
@@ -178,6 +196,10 @@ func _process(delta: float) -> void:
 	if absf(want - car_lane) < 0.03: car_lane = want
 	var la = mini(1, int(floor(car_lane)))
 	car_px = roundf(A.LANES[la] + (A.LANES[la + 1] - A.LANES[la]) * (car_lane - la)) + cy
+	# мотор слышен, пока машина едет; чем быстрее режим, тем выше тон
+	var rolling = S.screen == "title" or S.screen == "battle" or (S.screen == "drive" and speed > 0.0)
+	var pitch = clampf(442.0 / D.MODES[S.drive.mode].tick, 0.8, 1.4) if S.screen == "drive" else (1.1 if S.screen == "battle" else 1.0)
+	audio.update(dt, S.screen, rolling, pitch)
 	world.queue_redraw()
 	hud.queue_redraw()
 
@@ -308,6 +330,7 @@ func btn(x: float, y: float, w: float, h: float, text: String, o: Dictionary = {
 	if o.has("line3"): tx(o.line3, x + 12, y + 56, A.VIOLET2 if off else o.get("line3_col", A.GREY), 15)
 	if hot and click:
 		click = false
+		audio.sfx("click")
 		return true
 	return false
 
@@ -374,6 +397,10 @@ func go(a: Dictionary) -> bool:
 		if S.screen == "battle":
 			disp = {}
 			lock_until = 0.0
+			audio.sfx("alarm")
+		if S.screen == "result": audio.sfx(("win" if S.over.win else "lose") if S.over != null else "ok", -7.0)
+	if a.type == "steer": audio.sfx("steer", -14.0)
+	elif a.type == "endTurn": audio.sfx("turn")
 	return true
 
 func _take_fx() -> void:
@@ -387,9 +414,11 @@ func _take_fx() -> void:
 			var text = D.RES_NAME[ob.res].to_upper() + (" +" if ob.n > 0 else " −") + str(abs(ob.n))
 			floats.append({"x": CAR_X + 96, "y": car_px - 96, "text": text, "col": A.MAG_L if bad else (A.CYAN_L if ob.res == "charge" else A.AMB_L), "t0": t, "hurt": false, "from": -1, "on": false})
 			if bad: shake_until = t + 0.16
+			audio.sfx("hit" if bad else "pick")
 		elif S.screen == "battle" and e.k == "dmg":
 			var p = disp.get(e.i)
 			floats.append({"x": p.x + p.w / 2.0 if p != null else 800.0, "y": p.y - p.h - 70 if p != null else 300.0, "text": "−" + str(e.n), "col": Color.WHITE, "t0": t, "hurt": false, "from": -1, "on": false})
+			audio.sfx("hit")
 		elif S.screen == "battle" and e.k == "hurt":
 			floats.append({"x": CAR_X + 96, "y": car_px - 96, "text": D.RES_NAME[e.res].to_upper() + " −" + str(e.n), "col": res_col[e.res], "t0": t0, "hurt": true, "from": e.i, "on": false})
 			t0 += 0.45
@@ -406,6 +435,7 @@ func _draw_floats() -> void:
 			f.on = true
 			if f.hurt:
 				shake_until = t + 0.18
+				audio.sfx("hurt", -6.0)
 				flash = {"i": f.from, "until": t + 0.24}
 		label(f.text, clampf(f.x, 80, W - 80), roundf(f.y - a * 44.0), f.col, 19)
 
@@ -468,6 +498,9 @@ func _sc_title() -> void:
 	if btn(440, 652, 400, 52, "НАЧАТЬ РЕЙС", {"accent": true, "size": 21}) or key_ok(): go({"type": "start"})
 	tx("Сид заезда: " + str(S.seed), 16, 660, A.LAV, 15)
 	if btn(16, 684, 150, 28, "Другой сид", {"size": 15}): new_game(-1)
+	if btn(874, 684, 190, 28, "Звук: выкл" if audio.muted else "Звук: вкл", {"size": 15}):
+		audio.muted = not audio.muted
+		_save_prefs()
 	if btn(1074, 684, 190, 28, "Подсказки: выкл" if hints_off else "Подсказки: вкл", {"size": 15}):
 		hints_off = not hints_off
 		if not hints_off: seen = {}   # включили заново — покажем всё с начала
@@ -1181,7 +1214,15 @@ func _run_tour(dir: String) -> void:
 	S.screen = "end"
 	await _shot(dir, "17-end")
 	print("tour: готово")
-	get_tree().quit()
+	_quit(0)
+
+# Сохраняет весь синтезированный звук в WAV: godot --path godot -- --audio-dump=/папка
+func _run_audio_dump(dir: String) -> void:
+	var t0 = Time.get_ticks_msec()
+	if not audio.has_music: await audio.music_ready
+	audio.dump(dir)
+	print("audio: музыка готова через ", Time.get_ticks_msec() - t0, " мс после запуска, файлы в ", dir)
+	_quit(0)
 
 # Прогон эталонных заездов через настоящий интерфейс: каждый шаг отрисовывается.
 # godot --path godot -- --replay
@@ -1199,7 +1240,7 @@ func _run_replay() -> void:
 			for k in raw: a[k] = int(raw[k]) if typeof(raw[k]) == TYPE_FLOAT and raw[k] == floor(raw[k]) else raw[k]
 			if not go(a):
 				print("replay: действие отклонено ", a)
-				get_tree().quit(1)
+				_quit(1)
 				return
 			shown[S.screen] = shown.get(S.screen, 0) + 1
 			total += 1
@@ -1207,7 +1248,7 @@ func _run_replay() -> void:
 			await get_tree().process_frame
 		if S.screen != "end":
 			print("replay: заезд не дошёл до финала, сид ", run.seed)
-			get_tree().quit(1)
+			_quit(1)
 			return
 	print("replay: готово, шагов ", total, ", экраны ", shown)
-	get_tree().quit()
+	_quit(0)
