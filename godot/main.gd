@@ -958,7 +958,7 @@ func _sc_shop() -> void:
 		var d = D.ITEMS[loot[i].id]
 		if btn(448, 594 + i * 38, 396, 34, d.name, {"sub": "+" + str(d.sell) + " кр", "tip": "Продать: " + d.name}):
 			go({"type": "sell", "uid": loot[i].uid})
-			return
+			break
 	tx("ОПИСАНИЕ", 860, 380, A.PALE, 15)
 	para(tip if tip != "" else "Наведи на товар, чтобы прочитать описание. В бардачок помещается только мелочь.", 860, 404, 384, Color.WHITE, 17, 24)
 	if btn(860, 596, 384, 44, "БАГАЖНИК"): _open_trunk()
@@ -1082,7 +1082,9 @@ func _draw_trunk() -> void:
 		else: rot = nr
 	if btn(px + 240, by, 196, 38, "ПРИМЕНИТЬ", {"off": d2 == null or not d2.has("use"), "why": "Вне боя не применяется" if d2 != null else "Ничего не выбрано"}):
 		if (go({"type": "use", "uid": sel_it.uid}) if sel_it != null else go({"type": "useGlove", "slot": sel.slot})): sel = null
-	if btn(px + 448, by, 196, 38, "В БАГАЖНИК", {"off": not (sel != null and sel.has("slot") and sel_id != null), "why": "Выбери предмет в бардачке"}):
+	var from_glove = sel != null and sel.has("slot") and sel_id != null
+	var no_room = from_glove and M.find_spot(S, sel_id) == null
+	if btn(px + 448, by, 196, 38, "В БАГАЖНИК", {"off": not from_glove or no_room, "why": "В багажнике нет места" if no_room else "Выбери предмет в бардачке"}):
 		if go({"type": "unstow", "slot": sel.slot}): sel = null
 	var ask = sel_it != null and drop_ask == sel_it.uid
 	if btn(px + 656, by, 196, 38, "ТОЧНО?" if ask else "ВЫБРОСИТЬ", {"off": sel_it == null or d2.get("lock", false), "why": "Это выбросить нельзя" if sel_it != null else "Выбери предмет в багажнике", "accent": ask}):
@@ -1095,6 +1097,18 @@ func _draw_trunk() -> void:
 	hint("trunk", "Нажми на предмет, затем на клетку — он переедет. Мелочь 1×1 можно положить в слот бардачка: только оттуда она доступна в бою.", [gx - 4, gy - 4, M.TRUNK_W * cs + 4, M.TRUNK_H * cs + 4], px + 392, py + 300)
 
 # ---------- сборка кадра интерфейса ----------
+
+func _draw_screen(id: String) -> void:
+	match id:
+		"title": _sc_title()
+		"map": _sc_map()
+		"drive": _sc_drive()
+		"battle": _sc_battle()
+		"event": _sc_event()
+		"result": _sc_result()
+		"park": _sc_park()
+		"shop": _sc_shop()
+		"end": _sc_end()
 
 func _paint_hud(ci: CanvasItem) -> void:
 	g = ci
@@ -1112,16 +1126,15 @@ func _paint_hud(ci: CanvasItem) -> void:
 	var base_y = A.ROAD_BOT + roundf(cam)
 	if base_y < H: rc(0, base_y, W, H - base_y, A.INK)
 	A.grad(g, 0, 0, W, 120, Color(0, 0, 0, 0.4), Color(0, 0, 0, 0))
-	match S.screen:
-		"title": _sc_title()
-		"map": _sc_map()
-		"drive": _sc_drive()
-		"battle": _sc_battle()
-		"event": _sc_event()
-		"result": _sc_result()
-		"park": _sc_park()
-		"shop": _sc_shop()
-		"end": _sc_end()
+	var shown = S.screen
+	_draw_screen(shown)
+	if S.screen != shown:
+		# Экран сменился посреди отрисовки (клик закончил бой, отрезок привёл в узел).
+		# Дорисовываем новый этим же кадром, уже без ввода: иначе на кадр пропала бы панель.
+		input_on = false
+		keys_live = false
+		click = false
+		_draw_screen(S.screen)
 	if trunk_open:
 		input_on = free
 		tip = ""
@@ -1231,13 +1244,23 @@ func _run_replay() -> void:
 	hints_off = true
 	var runs = JSON.parse_string(FileAccess.get_file_as_string("res://tests/replays.json"))
 	var shown = {}
+	var hints_seen = {}
 	var total = 0
 	for ri in mini(8, runs.size()):
 		var run = runs[ri]
 		new_game(int(run.seed))
+		# первые заезды идут с подсказками: каждая должна отрисоваться без ошибок
+		hints_off = ri >= 4
+		seen = {}
 		for raw in run.actions:
 			var a = {}
 			for k in raw: a[k] = int(raw[k]) if typeof(raw[k]) == TYPE_FLOAT and raw[k] == floor(raw[k]) else raw[k]
+			if S.screen == "map" and a.type == "travel" and not hints_off:
+				sel_node = a.to   # как будто игрок выбрал узел: появляется подсказка про режимы
+				await get_tree().process_frame
+				if coach != null:
+					hints_seen[coach.id] = 1
+					seen[coach.id] = 1
 			if not go(a):
 				print("replay: действие отклонено ", a)
 				_quit(1)
@@ -1246,9 +1269,15 @@ func _run_replay() -> void:
 			total += 1
 			if S.screen == "map" and total % 7 == 0: trunk_open = not trunk_open
 			await get_tree().process_frame
+			for guard in 8:   # закрываем подсказки, как это сделал бы игрок
+				if coach == null: break
+				hints_seen[coach.id] = 1
+				seen[coach.id] = 1
+				await get_tree().process_frame
 		if S.screen != "end":
 			print("replay: заезд не дошёл до финала, сид ", run.seed)
 			_quit(1)
 			return
 	print("replay: готово, шагов ", total, ", экраны ", shown)
+	print("replay: показано подсказок ", hints_seen.size(), ": ", ", ".join(hints_seen.keys()))
 	_quit(0)
