@@ -24,6 +24,7 @@
 | --- | --- | --- |
 | Где лежит | `index.html`, `src/` | `godot/` |
 | Играть онлайн | https://ggamarin.github.io/neon-drift/ | https://ggamarin.github.io/neon-drift/godot-web/ |
+| Скачать | — | [NeonDrift-windows.zip](https://github.com/ggamarin/neon-drift/raw/main/downloads/NeonDrift-windows.zip), Windows 64-бит |
 | Графика | Пиксель-арт 640×360 | Векторная 1280×720: сглаживание, градиенты, свечение, дождь частицами |
 | Звук | Короткие сигналы | Эффекты, мотор, дождь и музыка — всё синтезом в коде |
 | Логика | `src/model.js` | `godot/scripts/model.gd` — порт один в один |
@@ -71,7 +72,10 @@ node tools/gen-godot.js
 godot --headless --path godot --export-release "Web" ../godot-web/index.html
 ```
 
-Сборка под Windows — один файл `build/NeonDrift.exe` со вшитым игровым пакетом (папка `build/` в репозиторий не входит):
+Готовая сборка под Windows: [downloads/NeonDrift-windows.zip](https://github.com/ggamarin/neon-drift/raw/main/downloads/NeonDrift-windows.zip) —
+в архиве один `NeonDrift.exe` (64-бит), установка не нужна. Файл не подписан, поэтому SmartScreen может показать предупреждение.
+
+Пересобрать её — один файл `build/NeonDrift.exe` со вшитым игровым пакетом (папка `build/` в репозиторий не входит):
 
 ```bash
 godot --headless --path godot --export-release "Windows Desktop" ../build/NeonDrift.exe
