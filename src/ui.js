@@ -698,26 +698,36 @@ function drawTrunk() {
   for (let y = 0; y < TRUNK_H; y++) for (let x = 0; x < TRUNK_W; x++) rc(gx + x * cs, gy + y * cs, cs - 1, cs - 1, 1);
 
   let selIt = ui.sel && ui.sel.uid != null ? S.trunk.find(t => t.uid === ui.sel.uid) : null;
+  let hoverIt = null;
   S.trunk.forEach(t => {
     const D = ITEMS[t.id], [w, h] = itemSize(t), x = gx + t.x * cs, y = gy + t.y * cs, pw = w * cs - 1, ph = h * cs - 1;
     const sel = selIt === t, fill = D.lock ? 13 : D.sell ? 17 : D.use || D.battle ? 8 : 21;
     rc(x, y, pw, ph, sel ? (ui.f & 1 ? 26 : 12) : fill === 13 ? 14 : fill === 17 ? 18 : fill === 8 ? 10 : 23);
     rc(x + 1, y + 1, pw - 2, ph - 2, fill);
     itemIcon(c, t.id, x + ((pw - 24) >> 1), y + ((ph - 24) >> 1), 2);
-    if (hover(x, y, pw, ph)) {
-      ui.tip = D.name + '. ' + D.desc;
-      if (ui.click && !sel) { ui.sel = { uid: t.uid }; ui.rot = null; ui.dropAsk = null; ui.click = false; sfx('click'); selIt = t; }
-    }
+    if (hover(x, y, pw, ph)) { ui.tip = D.name + '. ' + D.desc; hoverIt = t; }
   });
 
-  // перенос выбранного предмета в клетку под курсором
-  if (selIt && hover(gx, gy, TRUNK_W * cs, TRUNK_H * cs)) {
-    const cxl = Math.floor((ui.mx - gx) / cs), cyl = Math.floor((ui.my - gy) / cs);
+  // Курсор багажника подстраивается под предмет.
+  // Над другим предметом — рамка по его размеру: клик выберет его.
+  // С выбранным предметом над сеткой — «призрак» по размеру выбранного: он не вылезает
+  // за сетку и цветом показывает, поместится ли предмет в это место.
+  if (hoverIt && hoverIt !== selIt) {
+    const [w, h] = itemSize(hoverIt), x = gx + hoverIt.x * cs, y = gy + hoverIt.y * cs;
+    outline(c, x - 1, y - 1, w * cs + 1, h * cs + 1, 26);
+    outline(c, x - 2, y - 2, w * cs + 3, h * cs + 3, 12);
+    if (ui.click) { ui.sel = { uid: hoverIt.uid }; ui.rot = null; ui.dropAsk = null; ui.click = false; sfx('click'); selIt = hoverIt; }
+  } else if (selIt && hover(gx, gy, TRUNK_W * cs, TRUNK_H * cs)) {
     const r = ui.rot == null ? selIt.r : ui.rot, D = ITEMS[selIt.id], w = r ? D.h : D.w, h = r ? D.w : D.h;
-    const moved = cxl !== selIt.x || cyl !== selIt.y || r !== selIt.r;
-    if (moved) {
-      const ok = fits(S, selIt.id, cxl, cyl, r, selIt.uid);
-      corners(gx + cxl * cs, gy + cyl * cs, w * cs - 1, h * cs - 1, ok ? 28 : 30);
+    const cxl = clamp(Math.floor((ui.mx - gx) / cs), 0, TRUNK_W - w), cyl = clamp(Math.floor((ui.my - gy) / cs), 0, TRUNK_H - h);
+    if (cxl !== selIt.x || cyl !== selIt.y || r !== selIt.r) {
+      const ok = fits(S, selIt.id, cxl, cyl, r, selIt.uid), col = ok ? 28 : 30, x = gx + cxl * cs, y = gy + cyl * cs;
+      rc(x, y, w * cs - 1, h * cs - 1, ok ? 27 : 29);
+      itemIcon(c, selIt.id, x + ((w * cs - 1 - 24) >> 1), y + ((h * cs - 1 - 24) >> 1), 2);
+      dith(c, x, y, w * cs - 1, h * cs - 1, ok ? 27 : 29, 0);
+      outline(c, x - 1, y - 1, w * cs + 1, h * cs + 1, col);
+      outline(c, x - 2, y - 2, w * cs + 3, h * cs + 3, col);
+      ui.tip = ok ? 'Положить сюда: ' + D.name : 'Сюда не помещается: место занято';
       if (ui.click) { ui.click = false; if (ok) { go({ type: 'place', uid: selIt.uid, x: cxl, y: cyl, r }); ui.rot = null; sfx('click'); } }
     }
   }

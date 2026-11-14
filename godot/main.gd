@@ -77,6 +77,7 @@ var coach = null
 var coach_on := false
 var hints_off := false
 var seen: Dictionary = {}
+var fake_mouse = null          # подставная позиция мыши для скриншотов в обходе экранов
 
 # ---------- запуск ----------
 
@@ -1008,6 +1009,7 @@ func _draw_trunk() -> void:
 		for xx in M.TRUNK_W: A.rr(g, gx + xx * cs, gy + yy * cs, cs - 3, cs - 3, A.NIGHT, 4)
 
 	var sel_it = _trunk_item(sel.uid) if sel != null and sel.has("uid") else null
+	var hover_it = null
 	for q in S.trunk:
 		var d = D.ITEMS[q.id]
 		var sz = M.item_size(q)
@@ -1021,27 +1023,45 @@ func _draw_trunk() -> void:
 		A.item_icon(g, q.id, x + (pw - 48) / 2.0, y + (ph - 48) / 2.0, 4.0)
 		if hover(x, y, pw, ph):
 			tip = d.name + ". " + d.desc
-			if click and not is_sel:
-				sel = {"uid": q.uid}
-				rot = null; drop_ask = null; click = false
-				sel_it = q
+			hover_it = q
 
-	# перенос выбранного предмета в клетку под курсором
-	if sel_it != null and hover(gx, gy, M.TRUNK_W * cs, M.TRUNK_H * cs):
-		var cx = int(floor((mx - gx) / cs))
-		var cy = int(floor((my - gy) / cs))
+	# Курсор багажника подстраивается под предмет.
+	# Над другим предметом — рамка по его размеру: клик выберет его.
+	# С выбранным предметом над сеткой — «призрак» по размеру выбранного: он не вылезает
+	# за сетку и цветом показывает, поместится ли предмет в это место.
+	if hover_it != null and (sel_it == null or hover_it.uid != sel_it.uid):
+		var hs = M.item_size(hover_it)
+		var hx = gx + hover_it.x * cs
+		var hy = gy + hover_it.y * cs
+		A.glow(g, hx + hs[0] * cs / 2.0, hy + hs[1] * cs / 2.0, hs[0] * cs * 0.8, hs[1] * cs * 0.8, A.CYAN, 0.3)
+		A.rr(g, hx - 3, hy - 3, hs[0] * cs + 3, hs[1] * cs + 3, Color(1, 1, 1, 0.1), 8, Color.WHITE, 3)
+		if click:
+			sel = {"uid": hover_it.uid}
+			rot = null; drop_ask = null; click = false
+			sel_it = hover_it
+			audio.sfx("click")
+	elif sel_it != null and hover(gx, gy, M.TRUNK_W * cs, M.TRUNK_H * cs):
 		var r = sel_it.r if rot == null else rot
-		var d = D.ITEMS[sel_it.id]
-		var w = d.h if r else d.w
-		var h = d.w if r else d.h
+		var sd = D.ITEMS[sel_it.id]
+		var w = sd.h if r else sd.w
+		var h = sd.w if r else sd.h
+		var cx = clampi(int(floor((mx - gx) / cs)), 0, M.TRUNK_W - w)
+		var cy = clampi(int(floor((my - gy) / cs)), 0, M.TRUNK_H - h)
 		if cx != sel_it.x or cy != sel_it.y or r != sel_it.r:
 			var ok = M.fits(S, sel_it.id, cx, cy, r, sel_it.uid)
-			corners(gx + cx * cs, gy + cy * cs, w * cs - 3, h * cs - 3, A.GREEN if ok else A.RED)
+			var col = A.GREEN if ok else A.RED
+			var x = gx + cx * cs
+			var y = gy + cy * cs
+			A.rr(g, x - 3, y - 3, w * cs + 3, h * cs + 3, Color(col.r * 0.3, col.g * 0.3, col.b * 0.3, 0.8), 8, col, 3)
+			A.item_icon(g, sel_it.id, x + (w * cs - 3 - 48) / 2.0, y + (h * cs - 3 - 48) / 2.0, 4.0)
+			rc(x, y, w * cs - 3, h * cs - 3, Color(col.r * 0.25, col.g * 0.25, col.b * 0.25, 0.45))
+			tip = "Положить сюда: " + sd.name if ok else "Сюда не помещается: место занято"
 			if click:
 				click = false
 				if ok:
 					go({"type": "place", "uid": sel_it.uid, "x": cx, "y": cy, "r": r})
 					rot = null
+					audio.sfx("click")
 
 	tx("БАРДАЧОК · доступен в бою", px + 400, py + 72, A.PALE, 15)
 	for slot in 3:
@@ -1112,7 +1132,7 @@ func _draw_screen(id: String) -> void:
 
 func _paint_hud(ci: CanvasItem) -> void:
 	g = ci
-	var mp = hud.get_local_mouse_position()
+	var mp = fake_mouse if fake_mouse != null else hud.get_local_mouse_position()
 	mx = mp.x
 	my = mp.y
 	tip = ""
@@ -1220,8 +1240,15 @@ func _run_tour(dir: String) -> void:
 	S.screen = "map"
 	M.add_item(S, "emp"); M.add_item(S, "scrap")
 	trunk_open = true
+	sel = null
+	fake_mouse = Vector2(232 + 56 * 2.5, 172 + 28)       # над ремкомплектом: рамка по его размеру
+	await _shot(dir, "16-trunk-hover")
 	sel = {"uid": 2}
-	await _shot(dir, "16-trunk")
+	fake_mouse = Vector2(232 + 56 * 5.5, 172 + 56 * 3.5)  # правый нижний угол: призрак прижат к краю сетки
+	await _shot(dir, "16-trunk-place")
+	fake_mouse = Vector2(232 + 56 * 5.5, 172 + 56 * 1.5)  # над занятым местом: не помещается
+	await _shot(dir, "16-trunk-blocked")
+	fake_mouse = null
 	trunk_open = false
 	S.over = {"win": true, "text": "Броневик дымит на обочине, шлагбаум поднят. Кейс едет дальше, в Развязку."}
 	S.screen = "end"
